@@ -9,6 +9,20 @@
 
 typedef std::vector<std::pair<UnitAITypes, int> > UnitTypeWeightArray;
 
+// city values used by AI_yieldValue's food part that do not depend on the plot (see AI_getCitizenEvalFoodData)
+struct CitizenEvalFoodData
+{
+	int iFoodDifference;
+	int iFood;
+	int iGrowthThreshold;
+	int iHealthLevel;
+	int iHappinessLevel;
+	int iExtraFreeSpecialists;
+	int iWorkingPopulation;
+	int iFoodRate;
+	int iHurryCostModifier;
+};
+
 class CvCityAI : public CvCity
 {
 
@@ -151,6 +165,8 @@ protected:
 	int m_iCitizenEvalDepth;
 	int m_aiGoodTilesCache[2];
 	int m_aiGoodSpecialistsCache[2];
+	CitizenEvalFoodData m_kEvalFood;
+	bool m_bEvalFoodValid;
 	
 	int m_iWorkersNeeded;
 	int m_iWorkersHave;
@@ -199,6 +215,7 @@ protected:
 	int AI_countGoodSpecialists(bool bHealthy);
 	void AI_beginCitizenEval();
 	void AI_endCitizenEval();
+	const CitizenEvalFoodData& AI_getCitizenEvalFoodData();
 	int AI_calculateTargetCulturePerTurn();
 	
 	void AI_stealPlots();

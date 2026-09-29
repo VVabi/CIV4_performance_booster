@@ -140,6 +140,7 @@ void CvCityAI::AI_reset()
 	m_iCitizenEvalDepth = 0;
 	m_aiGoodTilesCache[0] = m_aiGoodTilesCache[1] = -1;
 	m_aiGoodSpecialistsCache[0] = m_aiGoodSpecialistsCache[1] = MIN_INT;
+	m_bEvalFoodValid = false;
 
 	m_iWorkersNeeded = 0;
 	m_iWorkersHave = 0;
@@ -6874,16 +6875,19 @@ int CvCityAI::AI_yieldValue(short* piYields, short* piCommerceYields, bool bAvoi
 		// we still prefer more food if everything else is equal
 		iValue += (aiYields[YIELD_FOOD] * 1);
 
-		int iFoodPerTurn = (foodDifference(false) - ((bRemove) ? aiYields[YIELD_FOOD] : 0));
-		int iFoodLevel = getFood();
-		int iFoodToGrow = growthThreshold();
-		int iHealthLevel = goodHealth() - badHealth(/*bNoAngry*/ false, 0);
-		int iHappinessLevel = (isNoUnhappiness() ? std::max(3, iHealthLevel + 5) : happyLevel() - unhappyLevel(0));
+		// Performance: these city values do not depend on the plot, so during a citizen evaluation they are
+		// calculated once (see AI_beginCitizenEval)
+		const CitizenEvalFoodData& kFood = AI_getCitizenEvalFoodData();
+		int iFoodPerTurn = (kFood.iFoodDifference - ((bRemove) ? aiYields[YIELD_FOOD] : 0));
+		int iFoodLevel = kFood.iFood;
+		int iFoodToGrow = kFood.iGrowthThreshold;
+		int iHealthLevel = kFood.iHealthLevel;
+		int iHappinessLevel = kFood.iHappinessLevel;
 		int iPopulation = getPopulation();
-		int	iExtraPopulationThatCanWork = std::min(iPopulation - range(-iHappinessLevel, 0, iPopulation) + std::min(0, extraFreeSpecialists()) , NUM_CITY_PLOTS) - getWorkingPopulation() + ((bRemove) ? 1 : 0);
+		int	iExtraPopulationThatCanWork = std::min(iPopulation - range(-iHappinessLevel, 0, iPopulation) + std::min(0, kFood.iExtraFreeSpecialists) , NUM_CITY_PLOTS) - kFood.iWorkingPopulation + ((bRemove) ? 1 : 0);
 		int iConsumtionPerPop = GC.getFOOD_CONSUMPTION_PER_POPULATION();
 
-		int iAdjustedFoodDifference = (getYieldRate(YIELD_FOOD) + std::min(0, iHealthLevel)) - ((iPopulation + std::min(0, iHappinessLevel) - ((bRemove) ? 1 : 0)) * iConsumtionPerPop);
+		int iAdjustedFoodDifference = (kFood.iFoodRate + std::min(0, iHealthLevel)) - ((iPopulation + std::min(0, iHappinessLevel) - ((bRemove) ? 1 : 0)) * iConsumtionPerPop);
 		
 		// if we not human, allow us to starve to half full if avoiding growth
 		if (!bIgnoreStarvation)
@@ -7103,10 +7107,10 @@ int CvCityAI::AI_yieldValue(short* piYields, short* piCommerceYields, bool bAvoi
 				if (bCanPopRush && (iHappinessLevel > 0))
 				{
 					iSlaveryValue = 30 * 14 * std::max(0, aiYields[YIELD_FOOD] - ((iHealthLevel < 0) ? 1 : 0));
-					iSlaveryValue /= std::max(10, (growthThreshold() * (100 - getMaxFoodKeptPercent())));
+					iSlaveryValue /= std::max(10, (iFoodToGrow * (100 - getMaxFoodKeptPercent())));
 					
 					iSlaveryValue *= 100;
-					iSlaveryValue /= getHurryCostModifier(true);
+					iSlaveryValue /= kFood.iHurryCostModifier;
 					
 					iSlaveryValue *= iConsumtionPerPop * 2;
 					iSlaveryValue /= iConsumtionPerPop * 2 + std::max(0, iAdjustedFoodDifference);
@@ -8725,6 +8729,7 @@ void CvCityAI::AI_beginCitizenEval()
 	{
 		m_aiGoodTilesCache[0] = m_aiGoodTilesCache[1] = -1;
 		m_aiGoodSpecialistsCache[0] = m_aiGoodSpecialistsCache[1] = MIN_INT;
+	m_bEvalFoodValid = false;
 	}
 	m_iCitizenEvalDepth++;
 }
@@ -8733,6 +8738,26 @@ void CvCityAI::AI_endCitizenEval()
 {
 	FAssert(m_iCitizenEvalDepth > 0);
 	m_iCitizenEvalDepth--;
+}
+
+const CitizenEvalFoodData& CvCityAI::AI_getCitizenEvalFoodData()
+{
+	if (m_iCitizenEvalDepth > 0 && m_bEvalFoodValid)
+	{
+		return m_kEvalFood;
+	}
+
+	m_kEvalFood.iFoodDifference = foodDifference(false);
+	m_kEvalFood.iFood = getFood();
+	m_kEvalFood.iGrowthThreshold = growthThreshold();
+	m_kEvalFood.iHealthLevel = goodHealth() - badHealth(/*bNoAngry*/ false, 0);
+	m_kEvalFood.iHappinessLevel = (isNoUnhappiness() ? std::max(3, m_kEvalFood.iHealthLevel + 5) : happyLevel() - unhappyLevel(0));
+	m_kEvalFood.iExtraFreeSpecialists = extraFreeSpecialists();
+	m_kEvalFood.iWorkingPopulation = getWorkingPopulation();
+	m_kEvalFood.iFoodRate = getYieldRate(YIELD_FOOD);
+	m_kEvalFood.iHurryCostModifier = getHurryCostModifier(true);
+	m_bEvalFoodValid = (m_iCitizenEvalDepth > 0);
+	return m_kEvalFood;
 }
 //0 is normal
 //higher than zero means special.

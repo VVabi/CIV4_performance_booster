@@ -263,6 +263,7 @@ public:
 	
 	bool AI_isDoStrategy(int iStrategy) const;
 	void AI_forceUpdateStrategies();
+	bool AI_isStrategyHashCached() const;
 
 	void AI_nowHasTech(TechTypes eTech);
 	

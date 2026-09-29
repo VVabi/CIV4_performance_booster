@@ -13653,6 +13653,12 @@ void CvPlayerAI::AI_forceUpdateStrategies()
 	m_iStrategyHashCacheTurn = -1;
 }
 
+// true if AI_getStrategyHash() would return the cached value, i.e. calling it now does not change anything
+bool CvPlayerAI::AI_isStrategyHashCached() const
+{
+	return ((m_iStrategyHash != 0) && (m_iStrategyHashCacheTurn == GC.getGameINLINE().getGameTurn()));
+}
+
 int CvPlayerAI::AI_getStrategyHash() const
 {
     if ((m_iStrategyHash != 0) && (m_iStrategyHashCacheTurn == GC.getGameINLINE().getGameTurn()))

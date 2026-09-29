@@ -454,13 +454,17 @@ void CvUnitAI::AI_upgrade()
 	FAssertMsg(AI_getUnitAIType() != NO_UNITAI, "AI_getUnitAIType() is not expected to be equal with NO_UNITAI");
 
 	// Performance (from VabiGEM): cheap exits before valuing every unit type. canUpgrade() fails for every
-	// type in these cases anyway, and the random number below is only drawn when canUpgrade() succeeds,
-	// so the result and the random number sequence are unchanged.
-	if (!isReadyForUpgrade())
+	// type in these cases anyway, and the random number below is only drawn when canUpgrade() succeeds.
+	// Only taken when the owner's AI strategies are already computed for this turn: AI_unitValue() asks for
+	// them, and they are computed on the first request of each turn, so skipping that first request would
+	// compute them later, from a different game state (this changed AI war decisions in tests).
+	if (GET_PLAYER(getOwnerINLINE()).AI_isStrategyHashCached())
 	{
-		return;
-	}
-	{
+		if (!isReadyForUpgrade())
+		{
+			return;
+		}
+
 		bool bAnyUpgrade = false;
 		for (int iClass = 0; iClass < GC.getNumUnitClassInfos(); iClass++)
 		{

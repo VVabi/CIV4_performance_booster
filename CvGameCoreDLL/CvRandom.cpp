@@ -52,6 +52,21 @@ void CvRandom::reset(unsigned long ulSeed)
 
 unsigned short CvRandom::get(unsigned short usNum, const TCHAR* pszLog)
 {
+	// testing aid: with AUTOPLAY_RAND_LOG_TURN > 0, every game random number drawn during that game turn of an
+	// AI auto-play run is written to AutoPlayRand.log (reason and seed), so two runs can be compared draw by draw
+	static int s_iRandLogTurn = -1;
+	if (s_iRandLogTurn < 0)
+	{
+		s_iRandLogTurn = std::max(0, GC.getDefineINT("AUTOPLAY_RAND_LOG_TURN"));
+	}
+	if (s_iRandLogTurn > 0 && this == &(GC.getGameINLINE().getSorenRand()) &&
+		GC.getGameINLINE().getGameTurn() == s_iRandLogTurn && GC.getGameINLINE().getAIAutoPlay() > 0)
+	{
+		CvString szLine;
+		szLine.Format("seed %u, range %u: %s", m_ulRandomSeed, (unsigned int)usNum, (pszLog != NULL) ? pszLog : "(no reason)");
+		gDLL->logMsg("AutoPlayRand.log", szLine.c_str(), false, false);
+	}
+
 	if (pszLog != NULL)
 	{
 		if (GC.getLogging() && GC.getRandLogging())

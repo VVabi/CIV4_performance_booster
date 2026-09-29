@@ -114,6 +114,7 @@ public:
 		}
 		s_pCurrent = m_pParent;
 	}
+	VabiProfSample* getSample() const { return m_pSample; }
 	static VabiProfScope* s_pCurrent;
 private:
 	VabiProfSample* m_pSample;
@@ -127,6 +128,7 @@ void VabiProfOnActiveTurnEnd(bool bHuman);	// called for the active player's civ
 void VabiProfOnActiveTurnStart();
 void VabiProfOnAutoPlayStart();				// called by CvGame::setAIAutoPlay
 void VabiProfOnAutoPlayEnd(int iStartTurn, int iEndTurn, bool bStoppedEarly);
+VabiProfSample* VabiProfCallerSample(const char* szPrefix);	// a sample per calling scope: "<prefix><caller>"
 
 #define PROFILE(name)\
 	static VabiProfSample sample(name);\

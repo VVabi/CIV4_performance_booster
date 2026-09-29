@@ -12,6 +12,7 @@
 #ifdef VABI_PROFILE
 
 #include <algorithm>
+#include <map>
 
 static VabiProfSample* s_pFirstSample = NULL;
 VabiProfScope* VabiProfScope::s_pCurrent = NULL;
@@ -86,6 +87,26 @@ static void writeTable(std::vector<VabiProfSample*>& aSamples, double fMsPerTick
 		gDLL->logMsg("VabiProfile.log", szBuf, false, false);
 		iLines++;
 	}
+}
+
+// one sample per (prefix, caller) pair, e.g. to see which AI functions request the path searches
+VabiProfSample* VabiProfCallerSample(const char* szPrefix)
+{
+	static std::map<std::pair<const char*, VabiProfSample*>, VabiProfSample*> s_mapSamples;
+	VabiProfSample* pCaller = (VabiProfScope::s_pCurrent != NULL) ? VabiProfScope::s_pCurrent->getSample() : NULL;
+	std::pair<const char*, VabiProfSample*> key(szPrefix, pCaller);
+	std::map<std::pair<const char*, VabiProfSample*>, VabiProfSample*>::iterator it = s_mapSamples.find(key);
+	if (it != s_mapSamples.end())
+	{
+		return it->second;
+	}
+	const char* szCaller = (pCaller != NULL) ? pCaller->m_szName : "(no caller)";
+	char* szName = new char[strlen(szPrefix) + strlen(szCaller) + 1];	// kept for the whole session
+	strcpy(szName, szPrefix);
+	strcat(szName, szCaller);
+	VabiProfSample* pSample = new VabiProfSample(szName);
+	s_mapSamples[key] = pSample;
+	return pSample;
 }
 
 void VabiProfOnActiveTurnEnd(bool bHuman)
@@ -193,6 +214,20 @@ void VabiProfOnAutoPlayEnd(int iStartTurn, int iEndTurn, bool bStoppedEarly)
 	gDLL->logMsg("VabiProfile.log", "--- Whole run, sorted by total time ---", false, false);
 	std::sort(aSamples.begin(), aSamples.end(), sortByRunTotal);
 	writeTable(aSamples, fMsPerTick, 80, true);
+
+	std::vector<VabiProfSample*> aCallers;
+	for (int i = 0; i < (int)aSamples.size(); i++)
+	{
+		if (strncmp(aSamples[i]->m_szName, "path <- ", 8) == 0)
+		{
+			aCallers.push_back(aSamples[i]);
+		}
+	}
+	if (!aCallers.empty())
+	{
+		gDLL->logMsg("VabiProfile.log", "--- Whole run, path searches by calling function (total = time of the searches) ---", false, false);
+		writeTable(aCallers, fMsPerTick, 1000, true);
+	}
 }
 
 #endif // VABI_PROFILE

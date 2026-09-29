@@ -1245,17 +1245,64 @@ static int getPathPlotDanger(PlayerTypes ePlayer, CvPlot* pPlot)
 	return s_aiPathDangerValue[iIndex];
 }
 
+// Performance: more per-search caches for pathValid. The selection group and the game do not change during a
+// search, so these group properties and per-plot move checks are fixed; they are only used while pathValid
+// works for the group that started the search (pathDestValid), otherwise everything is calculated as before.
+static const void* s_pPathGroup = NULL;
+static int s_iPathGroupFlagsId = -1;
+static bool s_bPathGroupCanFight = false;
+static bool s_bPathGroupAlwaysInvisible = false;
+static std::vector<int> s_aiPathMoveStamp;
+static std::vector<char> s_abPathMoveValue;
+
+static void updatePathGroupFlags(CvSelectionGroup* pSelectionGroup)
+{
+	if (s_iPathGroupFlagsId != s_iPathSearchId)
+	{
+		s_iPathGroupFlagsId = s_iPathSearchId;
+		s_bPathGroupCanFight = pSelectionGroup->canFight();
+		s_bPathGroupAlwaysInvisible = pSelectionGroup->alwaysInvisible();
+	}
+}
+
+// pSelectionGroup->canMoveOrAttackInto(pPlot) if bThroughEnemy, else pSelectionGroup->canMoveThrough(pPlot)
+static bool getPathCanMove(CvSelectionGroup* pSelectionGroup, CvPlot* pPlot, bool bThroughEnemy)
+{
+	if (pSelectionGroup != s_pPathGroup)
+	{
+		return bThroughEnemy ? pSelectionGroup->canMoveOrAttackInto(pPlot) : pSelectionGroup->canMoveThrough(pPlot);
+	}
+	int iIndex = GC.getMapINLINE().plotNumINLINE(pPlot->getX_INLINE(), pPlot->getY_INLINE());
+	if ((int)s_aiPathMoveStamp.size() != GC.getMapINLINE().numPlotsINLINE())
+	{
+		s_aiPathMoveStamp.assign(GC.getMapINLINE().numPlotsINLINE(), -1);
+		s_abPathMoveValue.assign(GC.getMapINLINE().numPlotsINLINE(), 0);
+	}
+	// the stamp combines search id and check type, so a stale entry can never match
+	int iStamp = s_iPathSearchId * 2 + (bThroughEnemy ? 1 : 0);
+	if (s_aiPathMoveStamp[iIndex] != iStamp)
+	{
+		s_aiPathMoveStamp[iIndex] = iStamp;
+		s_abPathMoveValue[iIndex] = (bThroughEnemy ? pSelectionGroup->canMoveOrAttackInto(pPlot) : pSelectionGroup->canMoveThrough(pPlot)) ? 1 : 0;
+	}
+	return (s_abPathMoveValue[iIndex] != 0);
+}
+
 int pathDestValid(int iToX, int iToY, const void* pointer, FAStar* finder)
 {
 	PROFILE_FUNC();
 
 	// new path search: new cache generation (wraps safely, stamps are only compared for equality)
 	s_iPathSearchId++;
+	s_pPathGroup = pointer;
 	if (s_iPathSearchId > 20000000)
 	{
 		s_iPathSearchId = 0;
 		s_aiPathDangerStamp.clear();
 		s_aiPathDangerValue.clear();
+		s_aiPathMoveStamp.clear();
+		s_abPathMoveValue.clear();
+		s_iPathGroupFlagsId = -1;
 	}
 
 	CLLNode<IDInfo>* pUnitNode1;
@@ -1583,7 +1630,7 @@ int pathValid(FAStarNode* parent, FAStarNode* node, int data, const void* pointe
 		{
 			if (!(gDLL->getFAStarIFace()->GetInfo(finder) & MOVE_IGNORE_DANGER))
 			{
-				if (!(pSelectionGroup->canFight()) && !(pSelectionGroup->alwaysInvisible()))
+				if ((pSelectionGroup == s_pPathGroup) ? (updatePathGroupFlags(pSelectionGroup), !s_bPathGroupCanFight && !s_bPathGroupAlwaysInvisible) : (!(pSelectionGroup->canFight()) && !(pSelectionGroup->alwaysInvisible())))
 				{
 					if (getPathPlotDanger(pSelectionGroup->getHeadOwner(), pFromPlot) > 0)
 					{
@@ -1598,14 +1645,14 @@ int pathValid(FAStarNode* parent, FAStarNode* node, int data, const void* pointe
 	{
 		if (gDLL->getFAStarIFace()->GetInfo(finder) & MOVE_THROUGH_ENEMY)
 		{
-			if (!(pSelectionGroup->canMoveOrAttackInto(pFromPlot)))
+			if (!getPathCanMove(pSelectionGroup, pFromPlot, true))
 			{
 				return FALSE;
 			}
 		}
 		else
 		{
-			if (!(pSelectionGroup->canMoveThrough(pFromPlot)))
+			if (!getPathCanMove(pSelectionGroup, pFromPlot, false))
 			{
 				return FALSE;
 			}

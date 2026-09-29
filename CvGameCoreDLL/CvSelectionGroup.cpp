@@ -3741,6 +3741,9 @@ CvPlot* CvSelectionGroup::getPathEndTurnPlot() const
 
 bool CvSelectionGroup::generatePath( const CvPlot* pFromPlot, const CvPlot* pToPlot, int iFlags, bool bReuse, int* piPathTurns) const
 {
+#ifdef VABI_PROFILE
+	VabiProfScope kCallerScope(VabiProfCallerSample("path <- "));	// which function requested the search
+#endif
 	PROFILE("CvSelectionGroup::generatePath()")
 
 	FAStarNode* pNode;

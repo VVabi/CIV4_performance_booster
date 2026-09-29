@@ -9661,6 +9661,8 @@ void CvPlayer::setTurnActiveForPbem(bool bActive)
 }
 
 
+void VabiMemoryLogTurnStart();	// VabiMemoryLog.cpp
+
 void CvPlayer::setTurnActive(bool bNewValue, bool bDoTurn)
 {
 	int iI;
@@ -9683,6 +9685,12 @@ void CvPlayer::setTurnActive(bool bNewValue, bool bDoTurn)
 			}
 		}
 #endif
+
+		// one line of memory statistics per turn of the active player's civilization (LogsVabiMemory.log, VABI_MEMORY_LOG)
+		if (bNewValue && getID() == GC.getGameINLINE().getActivePlayer())
+		{
+			VabiMemoryLogTurnStart();
+		}
 
 		if (isTurnActive())
 		{

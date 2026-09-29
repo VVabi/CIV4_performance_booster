@@ -189,3 +189,92 @@ def vabiPythonObjectCount():
 	'number of objects tracked by the Python garbage collector, for Logs\VabiMemory.log (called from the DLL)'
 	import gc
 	return len(gc.get_objects())
+
+# Performance: which CvGameUtils callbacks always return the same constant (checked once per session by the DLL,
+# see VabiPythonCallbacks.cpp). A callback qualifies only if the CvGameInterface function is exactly
+# "return gameUtils().<name>(argsList)" and the CvGameUtils method only unpacks its arguments and returns a
+# constant (no calls, no global or attribute access except True/False/None). Anything else is always called.
+# Return value for the DLL: 0 = must be called, 2*v+1 = always returns the integer (or bool) v.
+def _vabiOpcodes():
+	try:
+		import opcode
+		return opcode.HAVE_ARGUMENT, opcode.opmap
+	except:
+		return 90, {'POP_TOP': 1, 'BINARY_SUBSCR': 25, 'RETURN_VALUE': 83, 'UNPACK_SEQUENCE': 92, 'LOAD_CONST': 100, 'LOAD_ATTR': 105, 'LOAD_GLOBAL': 116, 'LOAD_FAST': 124, 'STORE_FAST': 125, 'CALL_FUNCTION': 131}
+
+def _vabiReachableOps(code, iHaveArgument):
+	'opcodes up to and including the first RETURN_VALUE (without jumps, the rest is unreachable)'
+	co = code.co_code
+	ops = []
+	i = 0
+	while i < len(co):
+		op = ord(co[i])
+		if op >= iHaveArgument:
+			arg = ord(co[i + 1]) + 256 * ord(co[i + 2])
+			i += 3
+		else:
+			arg = None
+			i += 1
+		ops.append((op, arg))
+		if op == 83:
+			break
+	return ops
+
+def vabiConstantCallback(argsList):
+	try:
+		szName = argsList[0]
+		import CvGameInterface
+		iHaveArgument, m = _vabiOpcodes()
+		# the interface function must only forward to gameUtils()
+		fWrapper = getattr(CvGameInterface, szName, None)
+		if fWrapper is None or not hasattr(fWrapper, 'func_code'):
+			return 0
+		wc = fWrapper.func_code
+		ops = _vabiReachableOps(wc, iHaveArgument)
+		if wc.co_argcount != 1 or len(ops) != 6:
+			return 0
+		expected = [m['LOAD_GLOBAL'], m['CALL_FUNCTION'], m['LOAD_ATTR'], m['LOAD_FAST'], m['CALL_FUNCTION'], m['RETURN_VALUE']]
+		if [op for (op, arg) in ops] != expected:
+			return 0
+		if wc.co_names[ops[0][1]] != 'gameUtils' or ops[1][1] != 0 or wc.co_names[ops[2][1]] != szName or ops[3][1] != 0 or ops[4][1] != 1:
+			return 0
+		# the game utils method must only unpack its arguments and return a constant
+		method = getattr(CvGameInterface.gameUtils(), szName, None)
+		if method is None or not hasattr(method, 'im_func'):
+			return 0
+		code = method.im_func.func_code
+		if code.co_argcount != 2 or (code.co_flags & 0x2C) or code.co_freevars or code.co_cellvars:
+			return 0
+		ops = _vabiReachableOps(code, iHaveArgument)
+		if len(ops) < 2 or ops[-1][0] != m['RETURN_VALUE']:
+			return 0
+		tail = ops[:-1]
+		# "return -1": Python 2.4 compiles negative constants as LOAD_CONST 1, UNARY_NEGATIVE
+		bNegate = (tail[-1][0] == m.get('UNARY_NEGATIVE', 11))
+		if bNegate:
+			tail = tail[:-1]
+		if len(tail) < 1:
+			return 0
+		allowed = [m['LOAD_FAST'], m['STORE_FAST'], m['LOAD_CONST'], m['BINARY_SUBSCR'], m['UNPACK_SEQUENCE'], m['POP_TOP'], m['LOAD_GLOBAL']]
+		for (op, arg) in tail:
+			if op not in allowed:
+				return 0
+			if op == m['LOAD_GLOBAL'] and code.co_names[arg] not in ('True', 'False', 'None'):
+				return 0
+		(op, arg) = tail[-1]
+		if op == m['LOAD_CONST']:
+			value = code.co_consts[arg]
+		elif op == m['LOAD_GLOBAL']:
+			value = {'True': True, 'False': False, 'None': None}[code.co_names[arg]]
+		else:
+			return 0
+		if value is None or type(value) not in (type(0), type(True)):
+			return 0
+		value = int(value)
+		if bNegate:
+			value = -value
+		if value < -100000000 or value > 100000000:
+			return 0
+		return 2 * value + 1
+	except:
+		return 0

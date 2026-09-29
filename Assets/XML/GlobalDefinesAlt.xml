@@ -29,4 +29,12 @@
 		<DefineName>MAP_SYMBOL_BATCHING</DefineName>
 		<iDefineIntVal>1</iDefineIntVal>
 	</Define>
+	<Define>
+		<DefineName>AUTOPLAY_SKIP_AUTOSAVE</DefineName>
+		<iDefineIntVal>1</iDefineIntVal>
+	</Define>
+	<Define>
+		<DefineName>PYTHON_SKIP_TRIVIAL_CALLBACKS</DefineName>
+		<iDefineIntVal>1</iDefineIntVal>
+	</Define>
 </Civ4Defines>

@@ -14,6 +14,12 @@ bool CvDllPythonEvents::preEvent()
 bool CvDllPythonEvents::postEvent(CyArgsList& eventData)
 {
 	PROFILE("Python: event handlers (onEvent)");
+#ifdef VABI_PROFILE
+	// calls and time per event type ("event: <name>"; the first argument is the event name)
+	PyObject* pyEventName = (PyObject*)eventData.get(0);
+	const char* szEventName = (pyEventName != NULL && PyString_Check(pyEventName)) ? PyString_AsString(pyEventName) : "(unknown)";
+	VabiProfScope kEventScope(VabiProfNamedSample("event: ", szEventName));
+#endif
 	eventData.add(GC.getGameINLINE().isDebugMode());
 	eventData.add(false);
 	eventData.add(gDLL->altKey());

@@ -28,6 +28,7 @@ public:
 	DllExport int size() const { return m_iCnt;	}
 	DllExport void push_back(void* p) { FAssertMsg(m_iCnt<MAX_CY_ARGS, "increase cyArgsList::MAX_CY_ARGS"); m_aList[m_iCnt++] = p; }
 	DllExport void clear() { m_iCnt=0;	}
+	void* get(int i) const { return (i >= 0 && i < m_iCnt) ? m_aList[i] : NULL; }	// the Python object of argument i
 protected:
 	void* m_aList[MAX_CY_ARGS];
 	int m_iCnt;

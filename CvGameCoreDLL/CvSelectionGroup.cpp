@@ -3023,7 +3023,7 @@ bool CvSelectionGroup::groupAttack(int iX, int iY, int iFlags, bool& bFailedAlre
 						argsList.add(gDLL->getPythonIFace()->makePythonObject(pyGroup));	// pass in Selection Group class
 						argsList.add(gDLL->getPythonIFace()->makePythonObject(pyPlot));	// pass in Plot class
 						long lResult=0;
-						gDLL->getPythonIFace()->callFunction(PYGameModule, "doCombat", argsList.makeFunctionArgs(), &lResult);
+						if (!vabiConstantPythonCallback("doCombat", &lResult)) gDLL->getPythonIFace()->callFunction(PYGameModule, "doCombat", argsList.makeFunctionArgs(), &lResult);
 						delete pyGroup;	// python fxn must not hold on to this pointer 
 						delete pyPlot;	// python fxn must not hold on to this pointer 
 						if (lResult == 1)

@@ -13,6 +13,7 @@
 
 #include <algorithm>
 #include <map>
+#include <string>
 
 static VabiProfSample* s_pFirstSample = NULL;
 VabiProfScope* VabiProfScope::s_pCurrent = NULL;
@@ -106,6 +107,23 @@ VabiProfSample* VabiProfCallerSample(const char* szPrefix)
 	strcat(szName, szCaller);
 	VabiProfSample* pSample = new VabiProfSample(szName);
 	s_mapSamples[key] = pSample;
+	return pSample;
+}
+
+// one sample per name that is only known at runtime, e.g. "event: unitMove"
+VabiProfSample* VabiProfNamedSample(const char* szPrefix, const char* szName)
+{
+	static std::map<std::string, VabiProfSample*> s_mapSamples;
+	std::string szKey = std::string(szPrefix) + szName;
+	std::map<std::string, VabiProfSample*>::iterator it = s_mapSamples.find(szKey);
+	if (it != s_mapSamples.end())
+	{
+		return it->second;
+	}
+	char* szSampleName = new char[szKey.size() + 1];	// kept for the whole session
+	strcpy(szSampleName, szKey.c_str());
+	VabiProfSample* pSample = new VabiProfSample(szSampleName);
+	s_mapSamples[szKey] = pSample;
 	return pSample;
 }
 

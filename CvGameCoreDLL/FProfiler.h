@@ -129,6 +129,7 @@ void VabiProfOnActiveTurnStart();
 void VabiProfOnAutoPlayStart();				// called by CvGame::setAIAutoPlay
 void VabiProfOnAutoPlayEnd(int iStartTurn, int iEndTurn, bool bStoppedEarly);
 VabiProfSample* VabiProfCallerSample(const char* szPrefix);	// a sample per calling scope: "<prefix><caller>"
+VabiProfSample* VabiProfNamedSample(const char* szPrefix, const char* szName);	// a sample per runtime name
 
 #define PROFILE(name)\
 	static VabiProfSample sample(name);\

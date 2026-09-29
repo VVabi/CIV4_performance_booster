@@ -5841,7 +5841,13 @@ void CvGame::doTurn()
 
 	stopProfilingDLL();
 
-	{ PROFILE("doTurn: AutoSave (exe)"); gDLL->getEngineIFace()->AutoSave(); }
+	// AUTOPLAY_SKIP_AUTOSAVE = 1: no autosaves during AI auto-play (normal games are not affected; the turn that
+	// ends an auto-play run is saved as usual, because the auto-play counter is already 0 then)
+	if (getAIAutoPlay() == 0 || GC.getDefineINT("AUTOPLAY_SKIP_AUTOSAVE") <= 0)
+	{
+		PROFILE("doTurn: AutoSave (exe)");
+		gDLL->getEngineIFace()->AutoSave();
+	}
 }
 
 

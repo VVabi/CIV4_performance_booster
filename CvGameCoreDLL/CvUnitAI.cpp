@@ -79,12 +79,15 @@ bool CvUnitAI::AI_update()
 	FAssertMsg(isGroupHead(), "isGroupHead is expected to be true"); // XXX is this a good idea???
 
 	// allow python to handle it
-	CyUnit* pyUnit = new CyUnit(this);
-	CyArgsList argsList;
-	argsList.add(gDLL->getPythonIFace()->makePythonObject(pyUnit));	// pass in unit class
 	long lResult=0;
-	gDLL->getPythonIFace()->callFunction(PYGameModule, "AI_unitUpdate", argsList.makeFunctionArgs(), &lResult);
-	delete pyUnit;	// python fxn must not hold on to this pointer
+	{
+		PROFILE("Python: AI_unitUpdate");
+		CyUnit* pyUnit = new CyUnit(this);
+		CyArgsList argsList;
+		argsList.add(gDLL->getPythonIFace()->makePythonObject(pyUnit));	// pass in unit class
+		gDLL->getPythonIFace()->callFunction(PYGameModule, "AI_unitUpdate", argsList.makeFunctionArgs(), &lResult);
+		delete pyUnit;	// python fxn must not hold on to this pointer
+	}
 	if (lResult == 1)
 	{
 		return false;

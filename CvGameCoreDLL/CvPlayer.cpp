@@ -9669,6 +9669,21 @@ void CvPlayer::setTurnActive(bool bNewValue, bool bDoTurn)
 	{
 		m_bTurnActive = bNewValue;
 
+#ifdef VABI_PROFILE
+		// timing profiler: one report per turn of the active player's civilization (also during AI auto-play)
+		if (getID() == GC.getGameINLINE().getActivePlayer())
+		{
+			if (bNewValue)
+			{
+				VabiProfOnActiveTurnStart();
+			}
+			else
+			{
+				VabiProfOnActiveTurnEnd(isHuman());
+			}
+		}
+#endif
+
 		if (isTurnActive())
 		{
 			if (GC.getLogging())

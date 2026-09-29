@@ -13,6 +13,7 @@ bool CvDllPythonEvents::preEvent()
 
 bool CvDllPythonEvents::postEvent(CyArgsList& eventData)
 {
+	PROFILE("Python: event handlers (onEvent)");
 	eventData.add(GC.getGameINLINE().isDebugMode());
 	eventData.add(false);
 	eventData.add(gDLL->altKey());

@@ -2111,12 +2111,15 @@ bool CvGame::canRunExtraFrame() const
 void CvGame::updateFrame()
 {
 	{
-		sendPlayerOptions();
+		{ PROFILE("frame: sendPlayerOptions"); sendPlayerOptions(); }
 
 		// sample generic event
+		{
+		PROFILE("frame: gameUpdate event (Python)");
 		CyArgsList pyArgs;
 		pyArgs.add(getTurnSlice());
 		CvEventReporter::getInstance().genericEvent("gameUpdate", pyArgs.makeFunctionArgs());
+		}
 
 		if (getTurnSlice() == 0)
 		{
@@ -2131,19 +2134,19 @@ void CvGame::updateFrame()
 			}
 		}
 
-		updateScore();
+		{ PROFILE("frame: updateScore"); updateScore(); }
 
-		updateWar();
+		{ PROFILE("frame: updateWar"); updateWar(); }
 
-		updateMoves();
+		{ PROFILE("frame: updateMoves"); updateMoves(); }
 
-		updateTimers();
+		{ PROFILE("frame: updateTimers"); updateTimers(); }
 
-		updateTurnTimer();
+		{ PROFILE("frame: updateTurnTimer"); updateTurnTimer(); }
 
-		AI_updateAssignWork();
+		{ PROFILE("frame: AI_updateAssignWork"); AI_updateAssignWork(); }
 
-		testAlive();
+		{ PROFILE("frame: testAlive"); testAlive(); }
 
 		if ((getAIAutoPlay() == 0) && !(gDLL->GetAutorun()) && GAMESTATE_EXTENDED != getGameState())
 		{
@@ -5838,7 +5841,7 @@ void CvGame::doTurn()
 
 	stopProfilingDLL();
 
-	gDLL->getEngineIFace()->AutoSave();
+	{ PROFILE("doTurn: AutoSave (exe)"); gDLL->getEngineIFace()->AutoSave(); }
 }
 
 

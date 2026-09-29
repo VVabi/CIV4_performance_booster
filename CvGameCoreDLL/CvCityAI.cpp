@@ -171,31 +171,32 @@ void CvCityAI::AI_doTurn()
 	
     if (!isHuman())
 	{
+	    PROFILE("city AI_doTurn: AI_stealPlots");
 	    AI_stealPlots();
 	}
 
-	AI_updateWorkersNeededHere();
+	{ PROFILE("city AI_doTurn: AI_updateWorkersNeededHere"); AI_updateWorkersNeededHere(); }
 
 	AI_updateBestBuild();
 
-	AI_updateRouteToCity();
+	{ PROFILE("city AI_doTurn: AI_updateRouteToCity"); AI_updateRouteToCity(); }
 
 	if (isHuman())
 	{
 	    if (isProductionAutomated())
 	    {
-	        AI_doHurry();	        
+	        AI_doHurry();
 	    }
 		return;
 	}
-	
-	AI_doPanic();
 
-	AI_doDraft();
+	{ PROFILE("city AI_doTurn: AI_doPanic"); AI_doPanic(); }
 
-	AI_doHurry();
+	{ PROFILE("city AI_doTurn: AI_doDraft"); AI_doDraft(); }
 
-	AI_doEmphasize();
+	{ PROFILE("city AI_doTurn: AI_doHurry"); AI_doHurry(); }
+
+	{ PROFILE("city AI_doTurn: AI_doEmphasize"); AI_doEmphasize(); }
 }
 
 

@@ -215,6 +215,21 @@ void VabiProfOnAutoPlayEnd(int iStartTurn, int iEndTurn, bool bStoppedEarly)
 	std::sort(aSamples.begin(), aSamples.end(), sortByRunTotal);
 	writeTable(aSamples, fMsPerTick, 80, true);
 
+	// all step timers ("frame: ...", "doTurn: ...", "player doTurn: ..."), sorted by total time
+	std::vector<VabiProfSample*> aSteps;
+	for (int i = 0; i < (int)aSamples.size(); i++)
+	{
+		if (strstr(aSamples[i]->m_szName, ": ") != NULL)
+		{
+			aSteps.push_back(aSamples[i]);
+		}
+	}
+	if (!aSteps.empty())
+	{
+		gDLL->logMsg("VabiProfile.log", "--- Whole run, all step timers (names with \": \") ---", false, false);
+		writeTable(aSteps, fMsPerTick, 1000, true);
+	}
+
 	std::vector<VabiProfSample*> aCallers;
 	for (int i = 0; i < (int)aSamples.size(); i++)
 	{

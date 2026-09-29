@@ -5682,35 +5682,38 @@ void CvGame::doTurn()
 	CvPlot::flushMapSymbols();
 
 	// END OF TURN
-	CvEventReporter::getInstance().beginGameTurn( getGameTurn() );
+	{ PROFILE("doTurn: beginGameTurn event (Python)"); CvEventReporter::getInstance().beginGameTurn( getGameTurn() ); }
 
-	doUpdateCacheOnTurn();
+	{ PROFILE("doTurn: doUpdateCacheOnTurn"); doUpdateCacheOnTurn(); }
 
-	updateScore();
+	{ PROFILE("doTurn: updateScore"); updateScore(); }
 
-	doDeals();
+	{ PROFILE("doTurn: doDeals"); doDeals(); }
 
-	for (iI = 0; iI < MAX_TEAMS; iI++)
 	{
-		if (GET_TEAM((TeamTypes)iI).isAlive())
+		PROFILE("doTurn: teams doTurn");
+		for (iI = 0; iI < MAX_TEAMS; iI++)
 		{
-			GET_TEAM((TeamTypes)iI).doTurn();
+			if (GET_TEAM((TeamTypes)iI).isAlive())
+			{
+				GET_TEAM((TeamTypes)iI).doTurn();
+			}
 		}
 	}
 
-	GC.getMapINLINE().doTurn();
+	{ PROFILE("doTurn: map doTurn"); GC.getMapINLINE().doTurn(); }
 
-	createBarbarianCities();
+	{ PROFILE("doTurn: createBarbarianCities"); createBarbarianCities(); }
 
-	createBarbarianUnits();
+	{ PROFILE("doTurn: createBarbarianUnits"); createBarbarianUnits(); }
 
-	doGlobalWarming();
+	{ PROFILE("doTurn: doGlobalWarming"); doGlobalWarming(); }
 
-	doHolyCity();
+	{ PROFILE("doTurn: doHolyCity"); doHolyCity(); }
 
-	doHeadquarters();
+	{ PROFILE("doTurn: doHeadquarters"); doHeadquarters(); }
 
-	doDiploVote();
+	{ PROFILE("doTurn: doDiploVote"); doDiploVote(); }
 
 	gDLL->getInterfaceIFace()->setEndTurnMessage(false);
 	gDLL->getInterfaceIFace()->setHasMovedUnit(false);
@@ -5759,11 +5762,13 @@ void CvGame::doTurn()
 		}
 	}
 
-	CvEventReporter::getInstance().endGameTurn(getGameTurn());
+	{ PROFILE("doTurn: endGameTurn event (Python)"); CvEventReporter::getInstance().endGameTurn(getGameTurn()); }
 
-	incrementGameTurn();
+	{ PROFILE("doTurn: incrementGameTurn"); incrementGameTurn(); }
 	incrementElapsedGameTurns();
 
+	{
+	PROFILE("doTurn: activate players (setTurnActive)");
 	if (isMPOption(MPOPTION_SIMULTANEOUS_TURNS))
 	{
 		shuffleArray(aiShuffle, MAX_PLAYERS, getSorenRand());
@@ -5822,10 +5827,12 @@ void CvGame::doTurn()
 		}
 	}
 
-	testVictory();
+	}
+
+	{ PROFILE("doTurn: testVictory"); testVictory(); }
 
 	gDLL->getEngineIFace()->SetDirty(GlobePartialTexture_DIRTY_BIT, true);
-	gDLL->getEngineIFace()->DoTurn();
+	{ PROFILE("doTurn: engine DoTurn (exe)"); gDLL->getEngineIFace()->DoTurn(); }
 
 	PROFILE_END();
 

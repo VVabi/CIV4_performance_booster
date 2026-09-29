@@ -218,14 +218,14 @@ void VabiProfOnAutoPlayEnd(int iStartTurn, int iEndTurn, bool bStoppedEarly)
 	std::vector<VabiProfSample*> aCallers;
 	for (int i = 0; i < (int)aSamples.size(); i++)
 	{
-		if (strncmp(aSamples[i]->m_szName, "path <- ", 8) == 0)
+		if (strstr(aSamples[i]->m_szName, " <- ") != NULL)
 		{
 			aCallers.push_back(aSamples[i]);
 		}
 	}
 	if (!aCallers.empty())
 	{
-		gDLL->logMsg("VabiProfile.log", "--- Whole run, path searches by calling function (total = time of the searches) ---", false, false);
+		gDLL->logMsg("VabiProfile.log", "--- Whole run, calls by calling function (\"x <- caller\"; total = time spent in x) ---", false, false);
 		writeTable(aCallers, fMsPerTick, 1000, true);
 	}
 }

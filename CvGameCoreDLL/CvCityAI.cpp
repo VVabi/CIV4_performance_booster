@@ -6614,6 +6614,7 @@ void CvCityAI::AI_juggleCitizens()
 			int iWorstPlot = -1;
 			int iValue;
 
+			AI_beginCitizenEval();	// Performance: read-only loop, see AI_beginCitizenEval
 			for (int iI = 0; iI < NUM_CITY_PLOTS; iI++)
 			{
 				if (iI != CITY_HOME_PLOT)
@@ -6636,6 +6637,7 @@ void CvCityAI::AI_juggleCitizens()
 						}
 					}
 				}
+			AI_endCitizenEval();
 
 			// if no worst plot, or we looped back around and are trying to remove the first plot we removed, stop
 			if (iWorstPlot == -1 || std::find(aWorstPlots.begin(), aWorstPlots.end(), iWorstPlot) != aWorstPlots.end())

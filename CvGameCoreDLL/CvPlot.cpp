@@ -1163,7 +1163,6 @@ bool CvPlot::isAdjacentToLand() const
 
 bool CvPlot::isCoastalLand(int iMinWaterSize) const
 {
-	PROFILE_FUNC();
 
 	CvPlot* pAdjacentPlot;
 	int iI;
@@ -5789,7 +5788,6 @@ int CvPlot::calculateTotalBestNatureYield(TeamTypes eTeam) const
 
 int CvPlot::calculateImprovementYieldChange(ImprovementTypes eImprovement, YieldTypes eYield, PlayerTypes ePlayer, bool bOptimal) const
 {
-	PROFILE_FUNC();
 
 	BonusTypes eBonus;
 	int iBestYield;

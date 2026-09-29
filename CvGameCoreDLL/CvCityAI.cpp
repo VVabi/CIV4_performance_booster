@@ -5265,6 +5265,9 @@ void CvCityAI::AI_updateBestBuild()
 	}
 	
 	
+	// Performance: the block below only changes the best build values, which the values cached for
+	// AI_yieldValue do not depend on (see AI_beginCitizenEval)
+	AI_beginCitizenEval();
 	{	//new experimental yieldValue calcuation
 		short aiYields[NUM_YIELD_TYPES];
 		int iBestPlot = -1;
@@ -5370,6 +5373,7 @@ void CvCityAI::AI_updateBestBuild()
 			}
 		}
 	}
+	AI_endCitizenEval();
 }
 
 // Protected Functions...
@@ -9286,6 +9290,7 @@ void CvCityAI::AI_updateWorkersNeededHere()
 			}
 		}
 	}
+	AI_beginCitizenEval();	// Performance: read-only loop, see AI_beginCitizenEval
 	for (int iI = 0; iI < NUM_CITY_PLOTS; iI++)
 	{
 		pLoopPlot = getCityIndexPlot(iI);
@@ -9352,8 +9357,9 @@ void CvCityAI::AI_updateWorkersNeededHere()
 			}
 		}
 	}
+	AI_endCitizenEval();
 	//specialists?
-	
+
 	iUnimprovedWorkedPlotCount += std::min(iUnimprovedUnworkedPlotCount, iWorkedUnimprovableCount) / 2;
 	
 	iWorkersNeeded += 2 * iUnimprovedWorkedPlotCount;
@@ -9369,7 +9375,8 @@ void CvCityAI::AI_updateWorkersNeededHere()
 		{
 			AI_addBestCitizen(true, true, &iBestPlot, &eBestSpecialist);
 		}
-		
+
+		AI_beginCitizenEval();	// Performance: read-only loop (after the temporary citizen was added)
 		for (int iI = 0; iI < NUM_CITY_PLOTS; iI++)
 		{
 			if (iI != CITY_HOME_PLOT)
@@ -9400,6 +9407,8 @@ void CvCityAI::AI_updateWorkersNeededHere()
 			}
 		}
 		
+		AI_endCitizenEval();
+
 		if (iBestPlot != -1)
 		{
 			setWorkingPlot(iBestPlot, false);

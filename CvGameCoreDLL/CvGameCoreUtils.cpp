@@ -1725,7 +1725,6 @@ int pathValid(FAStarNode* parent, FAStarNode* node, int data, const void* pointe
 
 int pathAdd(FAStarNode* parent, FAStarNode* node, int data, const void* pointer, FAStar* finder)
 {
-	PROFILE_FUNC();
 
 	CvSelectionGroup* pSelectionGroup = ((CvSelectionGroup *)pointer);
 	FAssert(pSelectionGroup->getNumUnits() > 0);

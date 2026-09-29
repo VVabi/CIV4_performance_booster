@@ -5140,7 +5140,6 @@ void CvPlayer::found(int iX, int iY)
 
 bool CvPlayer::canTrain(UnitTypes eUnit, bool bContinue, bool bTestVisible, bool bIgnoreCost) const
 {
-	PROFILE_FUNC();
 
 	UnitClassTypes eUnitClass;
 	int iI;
@@ -5958,7 +5957,6 @@ void CvPlayer::processBuilding(BuildingTypes eBuilding, int iChange, CvArea* pAr
 
 bool CvPlayer::canBuild(const CvPlot* pPlot, BuildTypes eBuild, bool bTestEra, bool bTestVisible) const
 {
-	PROFILE_FUNC();
 
 	if (!(pPlot->canBuild(eBuild, getID(), bTestVisible)))
 	{
@@ -6013,7 +6011,6 @@ int CvPlayer::getBuildCost(const CvPlot* pPlot, BuildTypes eBuild) const
 
 RouteTypes CvPlayer::getBestRoute(CvPlot* pPlot) const
 {
-	PROFILE_FUNC();
 
 	RouteTypes eRoute;
 	RouteTypes eBestRoute;

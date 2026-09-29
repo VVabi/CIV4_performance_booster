@@ -10407,7 +10407,6 @@ bool CvUnitAI::AI_explore()
 
 	for (iI = 0; iI < GC.getMapINLINE().numPlotsINLINE(); iI++)
 	{
-		PROFILE("AI_explore 1");
 
 		pLoopPlot = GC.getMapINLINE().plotByIndexINLINE(iI);
 
@@ -10524,7 +10523,6 @@ bool CvUnitAI::AI_exploreRange(int iRange)
 	{
 		for (iDY = -(iSearchRange); iDY <= iSearchRange; iDY++)
 		{
-			PROFILE("AI_exploreRange 1");
 
 			pLoopPlot	= plotXY(getX_INLINE(), getY_INLINE(), iDX, iDY);
 
@@ -16618,7 +16616,6 @@ int CvUnitAI::AI_searchRange(int iRange)
 // XXX at some point test the game with and without this function...
 bool CvUnitAI::AI_plotValid(CvPlot* pPlot)
 {
-	PROFILE_FUNC();
 
 	if (m_pUnitInfo->isNoRevealMap() && willRevealByMove(pPlot))
 	{

@@ -100,6 +100,13 @@ void CvGame::init(HandicapTypes eHandicap)
 
 	m_mapRand.init(GC.getInitCore().getMapRandSeed() % 73637381);
 	m_sorenRand.init(GC.getInitCore().getSyncRandSeed() % 52319761);
+	// testing aid: with FIXED_RANDOM_SEED > 0, every new game or scenario start uses the same random numbers
+	// (the exe otherwise picks new seeds each time), so two auto-play runs can be compared turn by turn
+	if (GC.getDefineINT("FIXED_RANDOM_SEED") > 0)
+	{
+		m_mapRand.init(GC.getDefineINT("FIXED_RANDOM_SEED"));
+		m_sorenRand.init(GC.getDefineINT("FIXED_RANDOM_SEED"));
+	}
 
 	//--------------------------------
 	// Init non-saved data
@@ -3870,6 +3877,11 @@ int CvGame::getAIAutoPlay()
 }
 
 
+// start of the current AI auto-play run (not saved: a run that was active when a game was loaded has no start)
+static int s_iAutoPlayStartTurn = -1;
+static int s_iAutoPlayPlannedTurns = 0;
+static DWORD s_dwAutoPlayStartTime = 0;
+
 void CvGame::setAIAutoPlay(int iNewValue)
 {
 	int iOldValue;
@@ -3892,6 +3904,35 @@ void CvGame::setAIAutoPlay(int iNewValue)
 			{
 				GET_PLAYER(getActivePlayer()).setHumanDisabled(false);
 			}
+		}
+
+		// run timing: Logs\AutoPlay.log gets one line per run; the Timing build also writes a run summary
+		if ((iOldValue == 0) && (getAIAutoPlay() > 0))
+		{
+			s_iAutoPlayStartTurn = getGameTurn();
+			s_iAutoPlayPlannedTurns = getAIAutoPlay();
+			s_dwAutoPlayStartTime = timeGetTime();
+#ifdef VABI_PROFILE
+			VabiProfOnAutoPlayStart();
+#endif
+		}
+		else if ((iOldValue > 0) && (getAIAutoPlay() == 0) && (s_iAutoPlayStartTurn >= 0))
+		{
+			// the countdown ends at 1 -> 0 in doTurn, before the game turn is incremented (so the run ends with the
+			// next turn); any other stop (e.g. the hotkey during a turn) is early and ends with the current turn
+			bool bStoppedEarly = (iOldValue > 1);
+			int iEndTurn = bStoppedEarly ? getGameTurn() : (getGameTurn() + 1);
+			int iRounds = iEndTurn - s_iAutoPlayStartTurn;
+			double fSeconds = (timeGetTime() - s_dwAutoPlayStartTime) / 1000.0;
+			CvString szLine;
+			szLine.Format("AI auto-play: game turns %d - %d, %d of %d planned rounds%s: %.1f s wall clock, %.2f s per round",
+				s_iAutoPlayStartTurn, iEndTurn, iRounds, s_iAutoPlayPlannedTurns, bStoppedEarly ? " (stopped early)" : "",
+				fSeconds, fSeconds / std::max(1, iRounds));
+			gDLL->logMsg("AutoPlay.log", szLine.c_str(), false, true);
+#ifdef VABI_PROFILE
+			VabiProfOnAutoPlayEnd(s_iAutoPlayStartTurn, iEndTurn, bStoppedEarly);
+#endif
+			s_iAutoPlayStartTurn = -1;
 		}
 	}
 }
@@ -5616,6 +5657,40 @@ void CvGame::doTurn()
 
 	if (getAIAutoPlay() > 0)
 	{
+		// game state after every auto-play turn: two runs from the same save must give the same numbers if a
+		// change (e.g. a performance setting) does not affect the game. Not calculateSyncChecksum(): its
+		// formula depends on getTurnSlice() % 4, i.e. on the number of frames, not only on the game state.
+		// The random seed changes with every random number drawn, so it catches any different decision.
+		int iUnits = 0, iCities = 0, iPop = 0, iGold = 0, iTechs = 0;
+		for (int iPlayer = 0; iPlayer < MAX_PLAYERS; iPlayer++)
+		{
+			CvPlayer& kPlayer = GET_PLAYER((PlayerTypes)iPlayer);
+			if (kPlayer.isAlive())
+			{
+				iUnits += kPlayer.getNumUnits();
+				iCities += kPlayer.getNumCities();
+				iPop += kPlayer.getTotalPopulation();
+				iGold += kPlayer.getGold();
+			}
+		}
+		for (int iTeam = 0; iTeam < MAX_TEAMS; iTeam++)
+		{
+			if (GET_TEAM((TeamTypes)iTeam).isAlive())
+			{
+				for (int iTech = 0; iTech < GC.getNumTechInfos(); iTech++)
+				{
+					if (GET_TEAM((TeamTypes)iTeam).isHasTech((TechTypes)iTech))
+					{
+						iTechs++;
+					}
+				}
+			}
+		}
+		CvString szLine;
+		szLine.Format("  game turn %d: rand seed %u, map rand seed %u, units %d, cities %d, pop %d, gold %d, techs %d (turn slice %d)",
+			getGameTurn(), getSorenRand().getSeed(), getMapRand().getSeed(), iUnits, iCities, iPop, iGold, iTechs, getTurnSlice());
+		gDLL->logMsg("AutoPlay.log", szLine.c_str(), false, false);
+
 		changeAIAutoPlay(-1);
 
 		if (getAIAutoPlay() == 0)

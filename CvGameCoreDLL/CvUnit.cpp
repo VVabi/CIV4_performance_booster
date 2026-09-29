@@ -5214,7 +5214,8 @@ bool CvUnit::found()
 		return false;
 	}
 
-	if (GC.getGameINLINE().getActivePlayer() == getOwnerINLINE())
+	// no camera jump when the AI founds the city for the active player (AI takeover during auto-play)
+	if ((GC.getGameINLINE().getActivePlayer() == getOwnerINLINE()) && GET_PLAYER(getOwnerINLINE()).isHuman())
 	{
 		gDLL->getInterfaceIFace()->lookAt(plot()->getPoint(), CAMERALOOKAT_NORMAL);
 	}

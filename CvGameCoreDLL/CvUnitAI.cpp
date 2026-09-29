@@ -513,6 +513,31 @@ static const std::vector<int>& getUpgradeTargets(CivilizationTypes eCiv, UnitTyp
 	return s_aaiTargets[iIndex];
 }
 
+// Performance: the tech requirements of CvPlayer::canTrain()
+static bool teamHasUnitTechs(TeamTypes eTeam, UnitTypes eUnit)
+{
+	CvUnitInfo& kUnit = GC.getUnitInfo(eUnit);
+	CvTeam& kTeam = GET_TEAM(eTeam);
+
+	if (!kTeam.isHasTech((TechTypes)kUnit.getPrereqAndTech()))
+	{
+		return false;
+	}
+
+	for (int iI = 0; iI < GC.getNUM_UNIT_AND_TECH_PREREQS(); iI++)
+	{
+		if (kUnit.getPrereqAndTechs(iI) != NO_TECH)
+		{
+			if (!kTeam.isHasTech((TechTypes)kUnit.getPrereqAndTechs(iI)))
+			{
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
 void CvUnitAI::AI_upgrade()
 {
 	PROFILE_FUNC();
@@ -582,6 +607,13 @@ void CvUnitAI::AI_upgrade()
 			{
 				if (bCheckUpgradeFirst)
 				{
+					// cheap necessary condition first: canUpgrade() needs a team city that can train the unit type,
+					// which needs the team to know its techs (unless Python's canTrain callback may allow it anyway).
+					// canUpgrade() itself starts with the upgrade price, which calls into Python.
+					if (!GC.getUSE_CAN_TRAIN_CALLBACK() && !teamHasUnitTechs(getTeam(), (UnitTypes)iI))
+					{
+						continue;
+					}
 					if (!canUpgrade((UnitTypes)iI))
 					{
 						continue;

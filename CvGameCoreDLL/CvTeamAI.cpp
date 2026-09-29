@@ -1229,6 +1229,47 @@ int CvTeamAI::AI_techTradeVal(TechTypes eTech, TeamTypes eTeam) const
 }
 
 
+// Performance: for each tech, the world unit classes and world wonder classes of units/buildings that require it.
+// Only depends on the XML data, so it is calculated once; AI_techTrade then only checks these classes instead
+// of looping over all unit and building types.
+static std::vector<std::vector<int> > s_aaiTechWorldUnitClasses;
+static std::vector<std::vector<int> > s_aaiTechWorldWonderClasses;
+
+static void initTechWorldClasses()
+{
+	if ((int)s_aaiTechWorldUnitClasses.size() == GC.getNumTechInfos())
+	{
+		return;
+	}
+	s_aaiTechWorldUnitClasses.assign(GC.getNumTechInfos(), std::vector<int>());
+	s_aaiTechWorldWonderClasses.assign(GC.getNumTechInfos(), std::vector<int>());
+	for (int iTech = 0; iTech < GC.getNumTechInfos(); iTech++)
+	{
+		for (int iI = 0; iI < GC.getNumUnitInfos(); iI++)
+		{
+			int iClass = GC.getUnitInfo((UnitTypes)iI).getUnitClassType();
+			if (isTechRequiredForUnit((TechTypes)iTech, (UnitTypes)iI) && isWorldUnitClass((UnitClassTypes)iClass))
+			{
+				if (std::find(s_aaiTechWorldUnitClasses[iTech].begin(), s_aaiTechWorldUnitClasses[iTech].end(), iClass) == s_aaiTechWorldUnitClasses[iTech].end())
+				{
+					s_aaiTechWorldUnitClasses[iTech].push_back(iClass);
+				}
+			}
+		}
+		for (int iI = 0; iI < GC.getNumBuildingInfos(); iI++)
+		{
+			int iClass = GC.getBuildingInfo((BuildingTypes)iI).getBuildingClassType();
+			if (isTechRequiredForBuilding((TechTypes)iTech, (BuildingTypes)iI) && isWorldWonderClass((BuildingClassTypes)iClass))
+			{
+				if (std::find(s_aaiTechWorldWonderClasses[iTech].begin(), s_aaiTechWorldWonderClasses[iTech].end(), iClass) == s_aaiTechWorldWonderClasses[iTech].end())
+				{
+					s_aaiTechWorldWonderClasses[iTech].push_back(iClass);
+				}
+			}
+		}
+	}
+}
+
 DenialTypes CvTeamAI::AI_techTrade(TechTypes eTech, TeamTypes eTeam) const
 {
 	PROFILE_FUNC();
@@ -1347,31 +1388,22 @@ DenialTypes CvTeamAI::AI_techTrade(TechTypes eTech, TeamTypes eTeam) const
 		}
 	}
 
-	for (iI = 0; iI < GC.getNumUnitInfos(); iI++)
+	// world units and world wonders this tech allows, that we are building (same result as looping over all
+	// unit and building types, see initTechWorldClasses)
+	initTechWorldClasses();
+	for (iI = 0; iI < (int)s_aaiTechWorldUnitClasses[eTech].size(); iI++)
 	{
-		if (isTechRequiredForUnit(eTech, ((UnitTypes)iI)))
+		if (getUnitClassMaking((UnitClassTypes)s_aaiTechWorldUnitClasses[eTech][iI]) > 0)
 		{
-			if (isWorldUnitClass((UnitClassTypes)(GC.getUnitInfo((UnitTypes)iI).getUnitClassType())))
-			{
-				if (getUnitClassMaking((UnitClassTypes)(GC.getUnitInfo((UnitTypes)iI).getUnitClassType())) > 0)
-				{
-					return DENIAL_MYSTERY;
-				}
-			}
+			return DENIAL_MYSTERY;
 		}
 	}
 
-	for (iI = 0; iI < GC.getNumBuildingInfos(); iI++)
+	for (iI = 0; iI < (int)s_aaiTechWorldWonderClasses[eTech].size(); iI++)
 	{
-		if (isTechRequiredForBuilding(eTech, ((BuildingTypes)iI)))
+		if (getBuildingClassMaking((BuildingClassTypes)s_aaiTechWorldWonderClasses[eTech][iI]) > 0)
 		{
-			if (isWorldWonderClass((BuildingClassTypes)(GC.getBuildingInfo((BuildingTypes)iI).getBuildingClassType())))
-			{
-				if (getBuildingClassMaking((BuildingClassTypes)(GC.getBuildingInfo((BuildingTypes)iI).getBuildingClassType())) > 0)
-				{
-					return DENIAL_MYSTERY;
-				}
-			}
+			return DENIAL_MYSTERY;
 		}
 	}
 

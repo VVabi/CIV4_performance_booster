@@ -6590,7 +6590,10 @@ int CvPlayerAI::AI_baseBonusVal(BonusTypes eBonus) const
 							iTempValue += kLoopBuilding.getPowerYieldModifier(iJ);
 						}
 					}
-					
+
+					// Performance: the block below only multiplies, divides or zeroes iTempValue, so a building
+					// that does not use this bonus (iTempValue 0) adds nothing; skip its canConstruct() check
+					if (iTempValue != 0)
 					{
 						// determine whether we have the tech for this building
 						bool bHasTechForBuilding = true;

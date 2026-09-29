@@ -1,0 +1,9 @@
+## Local build settings for CIV4_performance_booster (overrides the paths in Makefile)
+## Visual C++ Toolkit 2003 (compiler + linker)
+TOOLKIT=C:\Program Files (x86)\Microsoft Visual C++ Toolkit 2003
+## Old Windows SDK headers/libs that work with the 2003 compiler (extracted from the Civ4 SDK installer)
+PSDK=..\Tools\WindowsSDK
+## stub sal.h needed by the Windows SDK headers
+CUSTOM_CFLAGS = /I"..\Tools\compat"
+## Copy each new build into ..\Assets automatically
+YOURMOD=..

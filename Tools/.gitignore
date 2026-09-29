@@ -1,0 +1,2 @@
+# Windows SDK copy is large and only needed locally for building
+WindowsSDK/

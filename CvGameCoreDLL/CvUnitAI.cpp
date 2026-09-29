@@ -446,6 +446,73 @@ bool CvUnitAI::AI_follow()
 
 // XXX what if a unit gets stuck b/c of it's UnitAIType???
 // XXX is this function costing us a lot? (it's recursive...)
+// Performance: same as CvUnit::upgradeAvailable(), for any civilization (it only depends on the XML data)
+static bool upgradeAvailableForCiv(CivilizationTypes eCiv, UnitTypes eFromUnit, UnitClassTypes eToUnitClass, int iCount)
+{
+	int numUnitClassInfos = GC.getNumUnitClassInfos();
+
+	if (iCount > numUnitClassInfos)
+	{
+		return false;
+	}
+
+	CvUnitInfo& fromUnitInfo = GC.getUnitInfo(eFromUnit);
+
+	if (fromUnitInfo.getUpgradeUnitClass(eToUnitClass))
+	{
+		return true;
+	}
+
+	for (int iI = 0; iI < numUnitClassInfos; iI++)
+	{
+		if (fromUnitInfo.getUpgradeUnitClass(iI))
+		{
+			UnitTypes eLoopUnit = ((UnitTypes)(GC.getCivilizationInfo(eCiv).getCivilizationUnits(iI)));
+
+			if (eLoopUnit != NO_UNIT)
+			{
+				if (upgradeAvailableForCiv(eCiv, eLoopUnit, eToUnitClass, (iCount + 1)))
+				{
+					return true;
+				}
+			}
+		}
+	}
+
+	return false;
+}
+
+// Performance: the unit types (ascending) a unit of type eUnit of civilization eCiv could ever upgrade to, i.e.
+// those for which the XML-only checks at the start of canUpgrade() / getUpgradeCity() succeed. Calculated once.
+static const std::vector<int>& getUpgradeTargets(CivilizationTypes eCiv, UnitTypes eUnit)
+{
+	static std::vector<std::vector<int> > s_aaiTargets;
+	static std::vector<bool> s_abKnown;
+
+	int iSize = GC.getNumCivilizationInfos() * GC.getNumUnitInfos();
+	if ((int)s_abKnown.size() != iSize)
+	{
+		s_aaiTargets.assign(iSize, std::vector<int>());
+		s_abKnown.assign(iSize, false);
+	}
+
+	int iIndex = eCiv * GC.getNumUnitInfos() + eUnit;
+	if (!s_abKnown[iIndex])
+	{
+		for (int iI = 0; iI < GC.getNumUnitInfos(); iI++)
+		{
+			UnitClassTypes eClass = (UnitClassTypes)GC.getUnitInfo((UnitTypes)iI).getUnitClassType();
+			if (GC.getCivilizationInfo(eCiv).getCivilizationUnits(eClass) == iI &&
+				upgradeAvailableForCiv(eCiv, eUnit, eClass, 0))
+			{
+				s_aaiTargets[iIndex].push_back(iI);
+			}
+		}
+		s_abKnown[iIndex] = true;
+	}
+	return s_aaiTargets[iIndex];
+}
+
 void CvUnitAI::AI_upgrade()
 {
 	PROFILE_FUNC();
@@ -484,17 +551,48 @@ void CvUnitAI::AI_upgrade()
 	UnitAITypes eUnitAI = AI_getUnitAIType();
 	CvArea* pArea = area();
 
-	int iCurrentValue = kPlayer.AI_unitValue(getUnitType(), eUnitAI, pArea);
-	
+	// Performance: with the strategies already cached for this turn, AI_unitValue() and canUpgrade() have no
+	// side effects, so the order of the checks does not matter: a unit type is only valued if the unit can
+	// actually upgrade to it, and the unit's own value is only calculated when first needed. The random number
+	// is still drawn under exactly the same conditions. Without cached strategies the original order is kept,
+	// because AI_unitValue() may be the first to request them (see above).
+	bool bCheckUpgradeFirst = kPlayer.AI_isStrategyHashCached();
+	int iCurrentValue = 0;
+	bool bCurrentValueKnown = false;
+	if (!bCheckUpgradeFirst)
+	{
+		iCurrentValue = kPlayer.AI_unitValue(getUnitType(), eUnitAI, pArea);
+		bCurrentValueKnown = true;
+	}
+
 	for (int iPass = 0; iPass < 2; iPass++)
 	{
 		int iBestValue = 0;
 		UnitTypes eBestUnit = NO_UNIT;
 
-		for (int iI = 0; iI < GC.getNumUnitInfos(); iI++)
+		// with cached strategies, only the unit types this unit could ever upgrade to are visited (same order)
+		const std::vector<int>* paiTargets = bCheckUpgradeFirst ? &getUpgradeTargets(kPlayer.getCivilizationType(), getUnitType()) : NULL;
+		int iNumCandidates = bCheckUpgradeFirst ? (int)paiTargets->size() : GC.getNumUnitInfos();
+
+		for (int iCandidate = 0; iCandidate < iNumCandidates; iCandidate++)
 		{
+			int iI = bCheckUpgradeFirst ? (*paiTargets)[iCandidate] : iCandidate;
+
 			if ((iPass > 0) || GC.getUnitInfo((UnitTypes)iI).getUnitAIType(AI_getUnitAIType()))
 			{
+				if (bCheckUpgradeFirst)
+				{
+					if (!canUpgrade((UnitTypes)iI))
+					{
+						continue;
+					}
+					if (!bCurrentValueKnown)
+					{
+						iCurrentValue = kPlayer.AI_unitValue(getUnitType(), eUnitAI, pArea);
+						bCurrentValueKnown = true;
+					}
+				}
+
 				int iNewValue = kPlayer.AI_unitValue(((UnitTypes)iI), eUnitAI, pArea);
 				if ((iPass == 0 || iNewValue > 0) && iNewValue > iCurrentValue)
 				{
@@ -8507,6 +8605,60 @@ bool CvUnitAI::AI_spreadReligion()
 
 					if (AI_plotValid(pLoopCity->plot()) && pLoopCity->area() == area())
 					{
+						// the part of the value that does not depend on the path (moved before the path search)
+						int iBaseValue = (7 + (pLoopCity->getPopulation() * 4));
+
+						bool bOurCity = false;
+						if (pLoopCity->getOwnerINLINE() == getOwnerINLINE())
+						{
+							iBaseValue *= (bCultureVictory ? 16 : 4);
+							bOurCity = true;
+						}
+						else if (pLoopCity->getTeam() == getTeam())
+						{
+							iBaseValue *= 3;
+							bOurCity = true;
+						}
+						else
+						{
+							iBaseValue *= iPlayerMultiplierPercent;
+							iBaseValue /= 100;
+						}
+
+						int iCityReligionCount = pLoopCity->getReligionCount();
+						int iReligionCountFactor = iCityReligionCount;
+
+						if (bOurCity)
+						{
+							// count cities with no religion the same as cities with 2 religions
+							// prefer a city with exactly 1 religion already
+							if (iCityReligionCount == 0)
+							{
+								iReligionCountFactor = 2;
+							}
+							else if (iCityReligionCount == 1)
+							{
+								iBaseValue *= 2;
+							}
+						}
+						else
+						{
+							// absolutely prefer cities with zero religions
+							if (iCityReligionCount == 0)
+							{
+								iBaseValue *= 2;
+							}
+
+							// not our city, so prefer the lowest number of religions (increment so no divide by zero)
+							iReligionCountFactor++;
+						}
+
+						iBaseValue /= iReligionCountFactor;
+
+						// Performance: the final value is iBaseValue * 1000 / (iPathTurns + 2) with iPathTurns >= 0, so it
+						// is at most iBaseValue * 1000 / 2. If even that cannot beat the best city so far, the path
+						// search and the other checks cannot change the result. (Humans get an extra factor below.)
+						if (isHuman() || ((iBaseValue * 1000) / 2) > iBestValue)
 						if (canSpread(pLoopCity->plot(), eReligion))
 						{
 							if (!(pLoopCity->plot()->isVisibleEnemyUnit(this)))
@@ -8515,54 +8667,7 @@ bool CvUnitAI::AI_spreadReligion()
 								{
 									if (generatePath(pLoopCity->plot(), 0, true, &iPathTurns))
 									{
-										iValue = (7 + (pLoopCity->getPopulation() * 4));
-
-										bool bOurCity = false;
-										if (pLoopCity->getOwnerINLINE() == getOwnerINLINE())
-										{
-											iValue *= (bCultureVictory ? 16 : 4);
-											bOurCity = true;
-										}
-										else if (pLoopCity->getTeam() == getTeam())
-										{
-											iValue *= 3;
-											bOurCity = true;
-										}
-										else
-										{
-											iValue *= iPlayerMultiplierPercent;
-											iValue /= 100;
-										}
-										
-										int iCityReligionCount = pLoopCity->getReligionCount();
-										int iReligionCountFactor = iCityReligionCount;
-
-										if (bOurCity)
-										{
-											// count cities with no religion the same as cities with 2 religions
-											// prefer a city with exactly 1 religion already
-											if (iCityReligionCount == 0)
-											{
-												iReligionCountFactor = 2;
-											}
-											else if (iCityReligionCount == 1)
-											{
-												iValue *= 2;
-											}
-										}
-										else
-										{
-											// absolutely prefer cities with zero religions
-											if (iCityReligionCount == 0)
-											{
-												iValue *= 2;
-											}
-
-											// not our city, so prefer the lowest number of religions (increment so no divide by zero)
-											iReligionCountFactor++;
-										}
-
-										iValue /= iReligionCountFactor;
+										iValue = iBaseValue;
 
 										FAssert(iPathTurns > 0);
 										
@@ -13353,7 +13458,10 @@ bool CvUnitAI::AI_nextCityToImprove(CvCity* pCity)
 			iValue *= (iWorkersNeeded + 1);
 			iValue /= (iWorkersHave + 1);
 
-			if (iValue > 0)
+			// Performance: the final value is iValue * 1000 (* 2 for the capital) / (iPathTurns + 1) with
+			// iPathTurns >= 0, so it is at most iValue * 1000 (* 2). If even that cannot beat the best city so far,
+			// the build search (which runs its own path searches) and the path search cannot change the result.
+			if (iValue > 0 && (iValue * 1000 * (pLoopCity->isCapital() ? 2 : 1)) > iBestValue)
 			{
 				if (AI_bestCityBuild(pLoopCity, &pPlot, &eBuild, NULL, this))
 				{

@@ -64,6 +64,12 @@ public:
 	void updateSymbolVisibility();
 	void updateSymbols();
 
+	// Performance: optional batching of route and yield symbol updates while no human player has an active
+	// turn (MAP_SYMBOL_BATCHING); the marked plots are redrawn by flushMapSymbols()
+	static bool isMapSymbolBatching();
+	static void flushMapSymbols();
+	void markMapSymbolsDirty(int iFlags);
+
 	void updateMinimapColor();
 
 	void updateCenterUnit();

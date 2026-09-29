@@ -25,4 +25,8 @@
 		<DefineName>VABI_MEMORY_LOG</DefineName>
 		<iDefineIntVal>0</iDefineIntVal>
 	</Define>
+	<Define>
+		<DefineName>MAP_SYMBOL_BATCHING</DefineName>
+		<iDefineIntVal>1</iDefineIntVal>
+	</Define>
 </Civ4Defines>

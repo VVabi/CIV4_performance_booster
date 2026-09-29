@@ -3959,6 +3959,7 @@ void CvGame::setAIAutoPlay(int iNewValue)
 			else if ((iOldValue > 0) && (getAIAutoPlay() == 0))
 			{
 				GET_PLAYER(getActivePlayer()).setHumanDisabled(false);
+				CvPlot::flushMapSymbols();	// show the map symbols batched during auto-play
 			}
 		}
 
@@ -5676,6 +5677,9 @@ void CvGame::doTurn()
 	int aiShuffle[MAX_PLAYERS];
 	int iLoopPlayer;
 	int iI;
+
+	// map symbols batched during the AI turns of the round that just ended (MAP_SYMBOL_BATCHING)
+	CvPlot::flushMapSymbols();
 
 	// END OF TURN
 	CvEventReporter::getInstance().beginGameTurn( getGameTurn() );

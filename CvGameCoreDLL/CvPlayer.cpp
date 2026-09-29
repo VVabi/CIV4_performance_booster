@@ -9668,6 +9668,12 @@ void CvPlayer::setTurnActive(bool bNewValue, bool bDoTurn)
 	{
 		m_bTurnActive = bNewValue;
 
+		// a human's turn starts: show the map symbols batched during the AI turns (MAP_SYMBOL_BATCHING)
+		if (bNewValue && isHuman())
+		{
+			CvPlot::flushMapSymbols();
+		}
+
 #ifdef VABI_PROFILE
 		// timing profiler: one report per turn of the active player's civilization (also during AI auto-play)
 		if (getID() == GC.getGameINLINE().getActivePlayer())

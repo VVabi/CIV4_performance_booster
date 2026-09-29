@@ -546,6 +546,101 @@ void CvPlot::updateVisibility()
 }
 
 
+// Performance: batching of map symbol updates (MAP_SYMBOL_BATCHING in GlobalDefinesAlt.xml). While no human
+// player has an active turn (AI turns, AI auto-play), redrawing roads and yield symbols is only noted per plot
+// and done once by flushMapSymbols (start of the next game turn, start of a human turn, end of auto-play).
+// Graphics only: the game never reads these symbols.
+enum
+{
+	MAP_SYMBOL_ROUTE = 1,
+	MAP_SYMBOL_ROUTE_FORCE = 2,
+	MAP_SYMBOL_YIELDS = 4,
+	MAP_SYMBOL_DISPLAY = 8,
+};
+static std::vector<char> s_acMapSymbolDirty;
+static std::vector<int> s_aiMapSymbolDirtyPlots;
+static bool s_bFlushingMapSymbols = false;
+
+bool CvPlot::isMapSymbolBatching()
+{
+	static int s_iSetting = -1;
+	if (s_iSetting < 0)
+	{
+		s_iSetting = GC.getDefineINT("MAP_SYMBOL_BATCHING");
+	}
+	if (s_iSetting <= 0 || s_bFlushingMapSymbols || !GC.IsGraphicsInitialized())
+	{
+		return false;
+	}
+	CvGame& kGame = GC.getGameINLINE();
+	if (kGame.isNetworkMultiPlayer() || kGame.getGameState() != GAMESTATE_ON)
+	{
+		return false;
+	}
+	for (int iI = 0; iI < MAX_PLAYERS; iI++)
+	{
+		CvPlayer& kPlayer = GET_PLAYER((PlayerTypes)iI);
+		if (kPlayer.isAlive() && kPlayer.isHuman() && kPlayer.isTurnActive())
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+void CvPlot::markMapSymbolsDirty(int iFlags)
+{
+	int iNumPlots = GC.getMapINLINE().numPlotsINLINE();
+	if ((int)s_acMapSymbolDirty.size() != iNumPlots)
+	{
+		s_acMapSymbolDirty.assign(iNumPlots, 0);
+		s_aiMapSymbolDirtyPlots.clear();
+	}
+	int iIndex = GC.getMapINLINE().plotNumINLINE(getX_INLINE(), getY_INLINE());
+	if (s_acMapSymbolDirty[iIndex] == 0)
+	{
+		s_aiMapSymbolDirtyPlots.push_back(iIndex);
+	}
+	s_acMapSymbolDirty[iIndex] |= (char)iFlags;
+}
+
+void CvPlot::flushMapSymbols()
+{
+	if (s_aiMapSymbolDirtyPlots.empty())
+	{
+		return;
+	}
+	PROFILE_FUNC();
+
+	s_bFlushingMapSymbols = true;
+	int iNumPlots = GC.getMapINLINE().numPlotsINLINE();
+	for (int i = 0; i < (int)s_aiMapSymbolDirtyPlots.size(); i++)
+	{
+		int iIndex = s_aiMapSymbolDirtyPlots[i];
+		if (iIndex < 0 || iIndex >= iNumPlots || iIndex >= (int)s_acMapSymbolDirty.size())
+		{
+			continue;
+		}
+		int iFlags = s_acMapSymbolDirty[iIndex];
+		s_acMapSymbolDirty[iIndex] = 0;
+		CvPlot* pPlot = GC.getMapINLINE().plotByIndexINLINE(iIndex);
+		if (iFlags & MAP_SYMBOL_ROUTE)
+		{
+			pPlot->updateRouteSymbol((iFlags & MAP_SYMBOL_ROUTE_FORCE) != 0, false);
+		}
+		if (iFlags & MAP_SYMBOL_YIELDS)
+		{
+			pPlot->updateSymbols();	// includes the symbol display
+		}
+		else if (iFlags & MAP_SYMBOL_DISPLAY)
+		{
+			pPlot->updateSymbolDisplay();
+		}
+	}
+	s_aiMapSymbolDirtyPlots.clear();
+	s_bFlushingMapSymbols = false;
+}
+
 void CvPlot::updateSymbolDisplay()
 {
 	PROFILE_FUNC();
@@ -555,6 +650,12 @@ void CvPlot::updateSymbolDisplay()
 
 	if (!GC.IsGraphicsInitialized())
 	{
+		return;
+	}
+
+	if (isMapSymbolBatching())
+	{
+		markMapSymbolsDirty(MAP_SYMBOL_DISPLAY);
 		return;
 	}
 
@@ -618,6 +719,12 @@ void CvPlot::updateSymbols()
 
 	if (!GC.IsGraphicsInitialized())
 	{
+		return;
+	}
+
+	if (isMapSymbolBatching())
+	{
+		markMapSymbolsDirty(MAP_SYMBOL_YIELDS);
 		return;
 	}
 
@@ -7493,6 +7600,25 @@ void CvPlot::updateRouteSymbol(bool bForce, bool bAdjacent)
 
 	if (!GC.IsGraphicsInitialized())
 	{
+		return;
+	}
+
+	if (isMapSymbolBatching())
+	{
+		// same plots as below: this one and, with bAdjacent, its neighbours
+		int iFlags = MAP_SYMBOL_ROUTE | (bForce ? MAP_SYMBOL_ROUTE_FORCE : 0);
+		markMapSymbolsDirty(iFlags);
+		if (bAdjacent)
+		{
+			for (iI = 0; iI < NUM_DIRECTION_TYPES; ++iI)
+			{
+				pAdjacentPlot = plotDirection(getX_INLINE(), getY_INLINE(), ((DirectionTypes)iI));
+				if (pAdjacentPlot != NULL)
+				{
+					pAdjacentPlot->markMapSymbolsDirty(iFlags);
+				}
+			}
+		}
 		return;
 	}
 

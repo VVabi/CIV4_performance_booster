@@ -137,6 +137,10 @@ void CvCityAI::AI_reset()
 	m_iNeededFloatingDefenders = -1;
 	m_iNeededFloatingDefendersCacheTurn = -1;
 
+	m_iCitizenEvalDepth = 0;
+	m_aiGoodTilesCache[0] = m_aiGoodTilesCache[1] = -1;
+	m_aiGoodSpecialistsCache[0] = m_aiGoodSpecialistsCache[1] = MIN_INT;
+
 	m_iWorkersNeeded = 0;
 	m_iWorkersHave = 0;
 
@@ -6309,6 +6313,8 @@ bool CvCityAI::AI_addBestCitizen(bool bWorkers, bool bSpecialists, int* piBestPl
 {
 	PROFILE_FUNC();
 
+	AI_beginCitizenEval(); // evaluation only until AI_endCitizenEval()
+
 	bool bAvoidGrowth = AI_avoidGrowth();
 	bool bIgnoreGrowth = AI_ignoreGrowth();
 	bool bIsSpecialistForced = false;
@@ -6425,6 +6431,8 @@ bool CvCityAI::AI_addBestCitizen(bool bWorkers, bool bSpecialists, int* piBestPl
 		}
 	}
 	
+	AI_endCitizenEval();
+
 	if (eBestSpecialist != NO_SPECIALIST)
 	{
 		changeSpecialistCount(eBestSpecialist, 1);
@@ -6485,6 +6493,7 @@ bool CvCityAI::AI_removeWorstCitizen(SpecialistTypes eIgnoreSpecialist)
 		}
 	}
 
+	AI_beginCitizenEval(); // evaluation only until AI_endCitizenEval()
 	bAvoidGrowth = AI_avoidGrowth();
 	bIgnoreGrowth = AI_ignoreGrowth();
 
@@ -6537,6 +6546,8 @@ bool CvCityAI::AI_removeWorstCitizen(SpecialistTypes eIgnoreSpecialist)
 			}
 		}
 	}
+
+	AI_endCitizenEval();
 
 	if (eWorstSpecialist != NO_SPECIALIST)
 	{
@@ -6772,6 +6783,8 @@ bool CvCityAI::AI_foodAvailable(int iExtra)
 
 int CvCityAI::AI_yieldValue(short* piYields, short* piCommerceYields, bool bAvoidGrowth, bool bRemove, bool bIgnoreFood, bool bIgnoreGrowth, bool bIgnoreStarvation, bool bWorkerOptimization)
 {
+	PROFILE_FUNC();
+
 	const int iBaseProductionValue = 15;
 	const int iBaseCommerceValue = 7;
 	
@@ -7304,9 +7317,12 @@ int CvCityAI::AI_plotValue(CvPlot* pPlot, bool bAvoidGrowth, bool bRemove, bool 
 	iValue = 0;
 	iTotalDiff = 0;
 
+	{
+	PROFILE("AI_plotValue plot yields");
 	for (iI = 0; iI < NUM_YIELD_TYPES; iI++)
 	{
 		aiYields[iI] = pPlot->getYield((YieldTypes)iI);
+	}
 	}
 
 	eCurrentImprovement = pPlot->getImprovementType();
@@ -7346,6 +7362,7 @@ int CvCityAI::AI_plotValue(CvPlot* pPlot, bool bAvoidGrowth, bool bRemove, bool 
 			iYieldValue /= 16;
 	iValue += iYieldValue;
 
+	PROFILE_BEGIN("AI_plotValue bonus discover");
 	if (eCurrentImprovement != NO_IMPROVEMENT)
 	{
 		if (pPlot->getBonusType(getTeam()) == NO_BONUS) // XXX double-check CvGame::doFeature that the checks are the same...
@@ -7362,6 +7379,7 @@ int CvCityAI::AI_plotValue(CvPlot* pPlot, bool bAvoidGrowth, bool bRemove, bool 
 			}
 		}
 	}
+	PROFILE_END();
 
 	if ((eCurrentImprovement != NO_IMPROVEMENT) && (GC.getImprovementInfo(pPlot->getImprovementType()).getImprovementUpgrade() != NO_IMPROVEMENT))
 	{
@@ -8581,6 +8599,13 @@ int CvCityAI::AI_getPlotMagicValue(CvPlot* pPlot, bool bHealthy, bool bWorkerOpt
 //if healthy is false it assumes bad health conditions.
 int CvCityAI::AI_countGoodTiles(bool bHealthy, bool bUnworkedOnly, int iThreshold, bool bWorkerOptimization)
 {
+	// Performance: cached during a citizen evaluation (only the variant used by AI_yieldValue)
+	bool bCache = (m_iCitizenEvalDepth > 0 && bUnworkedOnly && iThreshold == 50);
+	if (bCache && m_aiGoodTilesCache[bHealthy ? 1 : 0] >= 0)
+	{
+		return m_aiGoodTilesCache[bHealthy ? 1 : 0];
+	}
+
     CvPlot* pLoopPlot;
     int iI;
     int iCount;
@@ -8603,6 +8628,10 @@ int CvCityAI::AI_countGoodTiles(bool bHealthy, bool bUnworkedOnly, int iThreshol
             }
         }
     }
+	if (bCache)
+	{
+		m_aiGoodTilesCache[bHealthy ? 1 : 0] = iCount;
+	}
     return iCount;
 }
 
@@ -8649,6 +8678,12 @@ int CvCityAI::AI_calculateTargetCulturePerTurn()
 	
 int CvCityAI::AI_countGoodSpecialists(bool bHealthy)
 {
+	// Performance: cached during a citizen evaluation
+	if (m_iCitizenEvalDepth > 0 && m_aiGoodSpecialistsCache[bHealthy ? 1 : 0] != MIN_INT)
+	{
+		return m_aiGoodSpecialistsCache[bHealthy ? 1 : 0];
+	}
+
 	CvPlayerAI& kPlayer = GET_PLAYER(getOwnerINLINE());
 	int iCount = 0;
 	for (int iI = 0; iI < GC.getNumSpecialistInfos(); iI++)
@@ -8673,8 +8708,31 @@ int CvCityAI::AI_countGoodSpecialists(bool bHealthy)
 		}
 	}
 	iCount -= getFreeSpecialist();
+
+	if (m_iCitizenEvalDepth > 0)
+	{
+		m_aiGoodSpecialistsCache[bHealthy ? 1 : 0] = iCount;
+	}
 	
 	return iCount;
+}
+
+// Performance: between begin and end, the caller only evaluates (AI_plotValue, AI_specialistValue) and does not
+// change the city, so values that only depend on the city state can be calculated once. Nesting is allowed.
+void CvCityAI::AI_beginCitizenEval()
+{
+	if (m_iCitizenEvalDepth == 0)
+	{
+		m_aiGoodTilesCache[0] = m_aiGoodTilesCache[1] = -1;
+		m_aiGoodSpecialistsCache[0] = m_aiGoodSpecialistsCache[1] = MIN_INT;
+	}
+	m_iCitizenEvalDepth++;
+}
+
+void CvCityAI::AI_endCitizenEval()
+{
+	FAssert(m_iCitizenEvalDepth > 0);
+	m_iCitizenEvalDepth--;
 }
 //0 is normal
 //higher than zero means special.

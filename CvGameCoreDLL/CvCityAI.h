@@ -145,6 +145,12 @@ protected:
 	
 	int m_iNeededFloatingDefenders;
 	int m_iNeededFloatingDefendersCacheTurn;
+
+	// Performance: during one citizen evaluation (see AI_beginCitizenEval) the city does not change, so the
+	// good tile / good specialist counts used by AI_yieldValue are calculated once (not saved)
+	int m_iCitizenEvalDepth;
+	int m_aiGoodTilesCache[2];
+	int m_aiGoodSpecialistsCache[2];
 	
 	int m_iWorkersNeeded;
 	int m_iWorkersHave;
@@ -191,6 +197,8 @@ protected:
 	int AI_getPlotMagicValue(CvPlot* pPlot, bool bHealthy, bool bWorkerOptimization = false);
 	int AI_countGoodTiles(bool bHealthy, bool bUnworkedOnly, int iThreshold = 50, bool bWorkerOptimization = false);
 	int AI_countGoodSpecialists(bool bHealthy);
+	void AI_beginCitizenEval();
+	void AI_endCitizenEval();
 	int AI_calculateTargetCulturePerTurn();
 	
 	void AI_stealPlots();

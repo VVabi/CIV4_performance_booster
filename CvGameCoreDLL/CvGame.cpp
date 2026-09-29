@@ -3880,10 +3880,18 @@ void CvGame::setAIAutoPlay(int iNewValue)
 	{
 		m_iAIAutoPlay = std::max(0, iNewValue);
 
-		if ((iOldValue == 0) && (getAIAutoPlay() > 0))
+		// AI takeover: the AI plays the active player's civilization during auto-play and hands it back
+		// afterwards (BtS killed all units and cities of the active player instead)
+		if (getActivePlayer() != NO_PLAYER)
 		{
-			GET_PLAYER(getActivePlayer()).killUnits();
-			GET_PLAYER(getActivePlayer()).killCities();
+			if ((iOldValue == 0) && (getAIAutoPlay() > 0))
+			{
+				GET_PLAYER(getActivePlayer()).setHumanDisabled(true);
+			}
+			else if ((iOldValue > 0) && (getAIAutoPlay() == 0))
+			{
+				GET_PLAYER(getActivePlayer()).setHumanDisabled(false);
+			}
 		}
 	}
 }

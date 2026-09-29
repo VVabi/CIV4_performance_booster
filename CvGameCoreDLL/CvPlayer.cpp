@@ -476,6 +476,7 @@ void CvPlayer::reset(PlayerTypes eID, bool bConstructorCall)
 	m_bExtendedGame = false;
 	m_bFoundedFirstCity = false;
 	m_bStrike = false;
+	m_bDisableHuman = false;
 
 	m_eID = eID;
 	updateTeamType();
@@ -2232,13 +2233,28 @@ bool CvPlayer::isHuman() const
 
 void CvPlayer::updateHuman()
 {
-	if (getID() == NO_PLAYER)
+	if (getID() == NO_PLAYER || m_bDisableHuman)
 	{
 		m_bHuman = false;
 	}
 	else
 	{
 		m_bHuman = GC.getInitCore().getHuman(getID());
+	}
+}
+
+// AI takeover: the AI plays a human player while this is set (see CvGame::setAIAutoPlay)
+bool CvPlayer::isHumanDisabled() const
+{
+	return m_bDisableHuman;
+}
+
+void CvPlayer::setHumanDisabled(bool bNewValue)
+{
+	if (m_bDisableHuman != bNewValue)
+	{
+		m_bDisableHuman = bNewValue;
+		updateHuman();
 	}
 }
 
@@ -16027,6 +16043,12 @@ void CvPlayer::read(FDataStreamBase* pStream)
 
 	pStream->Read(&m_iPopRushHurryCount);
 	pStream->Read(&m_iInflationModifier);
+
+	if (uiFlag > 1)
+	{
+		pStream->Read(&m_bDisableHuman);	// AI takeover
+		updateHuman();
+	}
 }
 
 //
@@ -16037,7 +16059,7 @@ void CvPlayer::write(FDataStreamBase* pStream)
 {
 	int iI;
 
-	uint uiFlag = 1;
+	uint uiFlag = 2;	// 2: m_bDisableHuman (AI takeover) at the end
 	pStream->Write(uiFlag);		// flag for expansion
 
 	pStream->Write(m_iStartingX);
@@ -16445,6 +16467,8 @@ void CvPlayer::write(FDataStreamBase* pStream)
 
 	pStream->Write(m_iPopRushHurryCount);
 	pStream->Write(m_iInflationModifier);
+
+	pStream->Write(m_bDisableHuman);	// AI takeover (flag 2)
 }
 
 void CvPlayer::createGreatPeople(UnitTypes eGreatPersonUnit, bool bIncrementThreshold, bool bIncrementExperience, int iX, int iY)

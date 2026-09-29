@@ -70,6 +70,9 @@ public:
 	bool hasTrait(TraitTypes eTrait) const;																																			// Exposed to Python						
 	DllExport bool isHuman() const;																																							// Exposed to Python						
 	DllExport void updateHuman();
+	// AI takeover: while set, isHuman() is false and the AI plays this player (used by AI auto-play)
+	bool isHumanDisabled() const;
+	void setHumanDisabled(bool bNewValue);
 	DllExport bool isBarbarian() const;																																					// Exposed to Python						
 
 	DllExport const wchar* getName(uint uiForm = 0) const;																											// Exposed to Python
@@ -1149,6 +1152,7 @@ protected:
 	bool m_bFoundedFirstCity;
 	bool m_bStrike;
 	bool m_bHuman;
+	bool m_bDisableHuman;	// AI takeover (saved with player flag 2)
 
 	PlayerTypes m_eID;
 	LeaderHeadTypes m_ePersonalityType;

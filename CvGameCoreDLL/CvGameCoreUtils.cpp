@@ -1252,6 +1252,7 @@ static const void* s_pPathGroup = NULL;
 static int s_iPathGroupFlagsId = -1;
 static bool s_bPathGroupCanFight = false;
 static bool s_bPathGroupAlwaysInvisible = false;
+static int s_iPathGroupNumUnits = 0;
 static std::vector<int> s_aiPathMoveStamp;
 static std::vector<char> s_abPathMoveValue;
 
@@ -1262,6 +1263,7 @@ static void updatePathGroupFlags(CvSelectionGroup* pSelectionGroup)
 		s_iPathGroupFlagsId = s_iPathSearchId;
 		s_bPathGroupCanFight = pSelectionGroup->canFight();
 		s_bPathGroupAlwaysInvisible = pSelectionGroup->alwaysInvisible();
+		s_iPathGroupNumUnits = pSelectionGroup->getNumUnits();
 	}
 }
 
@@ -1288,6 +1290,53 @@ static bool getPathCanMove(CvSelectionGroup* pSelectionGroup, CvPlot* pPlot, boo
 	return (s_abPathMoveValue[iIndex] != 0);
 }
 
+// Performance: pathCost's movement cost of a step for a single-unit group (it only depends on the unit and the
+// two plots) and the defense modifier of a plot for the group's team, cached per search
+static std::vector<int> s_aiPathStepCostStamp;
+static std::vector<int> s_aiPathStepCostValue;
+static std::vector<int> s_aiPathDefenseStamp;
+static std::vector<int> s_aiPathDefenseValue;
+
+static int getPathStepCost(const CvUnit* pUnit, const CvPlot* pFromPlot, const CvPlot* pToPlot)
+{
+	DirectionTypes eDirection = directionXY(pFromPlot, pToPlot);
+	if (eDirection == NO_DIRECTION)
+	{
+		return pToPlot->movementCost(pUnit, pFromPlot);
+	}
+	int iSize = GC.getMapINLINE().numPlotsINLINE() * NUM_DIRECTION_TYPES;
+	if ((int)s_aiPathStepCostStamp.size() != iSize)
+	{
+		s_aiPathStepCostStamp.assign(iSize, -1);
+		s_aiPathStepCostValue.assign(iSize, 0);
+	}
+	int iIndex = GC.getMapINLINE().plotNumINLINE(pToPlot->getX_INLINE(), pToPlot->getY_INLINE()) * NUM_DIRECTION_TYPES + eDirection;
+	if (s_aiPathStepCostStamp[iIndex] != s_iPathSearchId)
+	{
+		s_aiPathStepCostStamp[iIndex] = s_iPathSearchId;
+		s_aiPathStepCostValue[iIndex] = pToPlot->movementCost(pUnit, pFromPlot);
+	}
+	return s_aiPathStepCostValue[iIndex];
+}
+
+static int getPathDefenseModifier(const CvPlot* pPlot, TeamTypes eTeam)
+{
+	int iIndex = GC.getMapINLINE().plotNumINLINE(pPlot->getX_INLINE(), pPlot->getY_INLINE());
+	if ((int)s_aiPathDefenseStamp.size() != GC.getMapINLINE().numPlotsINLINE())
+	{
+		s_aiPathDefenseStamp.assign(GC.getMapINLINE().numPlotsINLINE(), -1);
+		s_aiPathDefenseValue.assign(GC.getMapINLINE().numPlotsINLINE(), 0);
+	}
+	// the stamp combines search id and team, so a stale entry can never match
+	int iStamp = s_iPathSearchId * MAX_TEAMS + (int)eTeam;
+	if (s_aiPathDefenseStamp[iIndex] != iStamp)
+	{
+		s_aiPathDefenseStamp[iIndex] = iStamp;
+		s_aiPathDefenseValue[iIndex] = pPlot->defenseModifier(eTeam, false);
+	}
+	return s_aiPathDefenseValue[iIndex];
+}
+
 int pathDestValid(int iToX, int iToY, const void* pointer, FAStar* finder)
 {
 	PROFILE_FUNC();
@@ -1303,6 +1352,10 @@ int pathDestValid(int iToX, int iToY, const void* pointer, FAStar* finder)
 		s_aiPathMoveStamp.clear();
 		s_abPathMoveValue.clear();
 		s_iPathGroupFlagsId = -1;
+		s_aiPathStepCostStamp.clear();
+		s_aiPathStepCostValue.clear();
+		s_aiPathDefenseStamp.clear();
+		s_aiPathDefenseValue.clear();
 	}
 
 	CLLNode<IDInfo>* pUnitNode1;
@@ -1441,6 +1494,13 @@ int pathCost(FAStarNode* parent, FAStarNode* node, int data, const void* pointer
 
 	pSelectionGroup = ((CvSelectionGroup *)pointer);
 
+	// Performance: per-search caches only for the group that started the search
+	bool bPathCache = (pointer == s_pPathGroup);
+	if (bPathCache)
+	{
+		updatePathGroupFlags(pSelectionGroup);
+	}
+
 	iWorstCost = MAX_INT;
 	iWorstMovesLeft = MAX_INT;
 	iWorstMax = MAX_INT;
@@ -1462,7 +1522,7 @@ int pathCost(FAStarNode* parent, FAStarNode* node, int data, const void* pointer
 			iMax = pLoopUnit->maxMoves();
 		}
 
-		iCost = pToPlot->movementCost(pLoopUnit, pFromPlot);
+		iCost = (bPathCache && s_iPathGroupNumUnits == 1) ? getPathStepCost(pLoopUnit, pFromPlot, pToPlot) : pToPlot->movementCost(pLoopUnit, pFromPlot);
 
 		iMovesLeft = std::max(0, (iMax - iCost));
 
@@ -1502,7 +1562,7 @@ int pathCost(FAStarNode* parent, FAStarNode* node, int data, const void* pointer
 				{
 					if (iMovesLeft == 0)
 					{
-						iCost += (PATH_DEFENSE_WEIGHT * std::max(0, (200 - ((pLoopUnit->noDefensiveBonus()) ? 0 : pToPlot->defenseModifier(pLoopUnit->getTeam(), false)))));
+						iCost += (PATH_DEFENSE_WEIGHT * std::max(0, (200 - ((pLoopUnit->noDefensiveBonus()) ? 0 : (bPathCache ? getPathDefenseModifier(pToPlot, pLoopUnit->getTeam()) : pToPlot->defenseModifier(pLoopUnit->getTeam(), false))))));
 					}
 
 					if (pSelectionGroup->AI_isControlled())

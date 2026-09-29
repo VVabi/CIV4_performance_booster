@@ -78,6 +78,10 @@ struct VabiProfSample
 	unsigned int m_iCalls;
 	int m_iDepth;
 	VabiProfSample* m_pNext;
+	// sums over the current AI auto-play run (added up from the per-round values)
+	__int64 m_iRunTotal;
+	__int64 m_iRunSelf;
+	unsigned int m_iRunCalls;
 };
 
 class VabiProfScope
@@ -121,6 +125,8 @@ private:
 
 void VabiProfOnActiveTurnEnd(bool bHuman);	// called for the active player's civilization (VabiProfiler.cpp)
 void VabiProfOnActiveTurnStart();
+void VabiProfOnAutoPlayStart();				// called by CvGame::setAIAutoPlay
+void VabiProfOnAutoPlayEnd(int iStartTurn, int iEndTurn, bool bStoppedEarly);
 
 #define PROFILE(name)\
 	static VabiProfSample sample(name);\

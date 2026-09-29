@@ -453,6 +453,29 @@ void CvUnitAI::AI_upgrade()
 	FAssertMsg(!isHuman(), "isHuman did not return false as expected");
 	FAssertMsg(AI_getUnitAIType() != NO_UNITAI, "AI_getUnitAIType() is not expected to be equal with NO_UNITAI");
 
+	// Performance (from VabiGEM): cheap exits before valuing every unit type. canUpgrade() fails for every
+	// type in these cases anyway, and the random number below is only drawn when canUpgrade() succeeds,
+	// so the result and the random number sequence are unchanged.
+	if (!isReadyForUpgrade())
+	{
+		return;
+	}
+	{
+		bool bAnyUpgrade = false;
+		for (int iClass = 0; iClass < GC.getNumUnitClassInfos(); iClass++)
+		{
+			if (GC.getUnitInfo(getUnitType()).getUpgradeUnitClass(iClass))
+			{
+				bAnyUpgrade = true;
+				break;
+			}
+		}
+		if (!bAnyUpgrade)
+		{
+			return;
+		}
+	}
+
 	CvPlayerAI& kPlayer = GET_PLAYER(getOwnerINLINE());
 	UnitAITypes eUnitAI = AI_getUnitAIType();
 	CvArea* pArea = area();

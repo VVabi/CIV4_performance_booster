@@ -44,6 +44,8 @@ public:
 	DllExport void normalizeStartingPlots();
 
 	DllExport void update();
+	void updateFrame();		// one frame of game logic (the body of the original update)
+	bool canRunExtraFrame() const;
 	DllExport void updateScore(bool bForce = false);
 
 	DllExport void updateColoredPlots();

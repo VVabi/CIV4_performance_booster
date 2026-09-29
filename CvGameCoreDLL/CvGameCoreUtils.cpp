@@ -1219,9 +1219,44 @@ int changeIrrigated(FAStarNode* parent, FAStarNode* node, int data, const void* 
 }
 
 
+// Performance (from VabiGEM): AI_getPlotDanger results cached for the duration of one path search.
+// The path finder asks for the danger of the same plot many times (once per neighbouring node), and nothing
+// in the game changes while a search runs, so the cached value is always exact. pathDestValid is called once
+// at the start of every search and starts a new cache generation.
+static int s_iPathSearchId = 0;
+static std::vector<int> s_aiPathDangerStamp;
+static std::vector<int> s_aiPathDangerValue;
+
+static int getPathPlotDanger(PlayerTypes ePlayer, CvPlot* pPlot)
+{
+	int iIndex = GC.getMapINLINE().plotNumINLINE(pPlot->getX_INLINE(), pPlot->getY_INLINE());
+	if ((int)s_aiPathDangerStamp.size() != GC.getMapINLINE().numPlotsINLINE())
+	{
+		s_aiPathDangerStamp.assign(GC.getMapINLINE().numPlotsINLINE(), -1);
+		s_aiPathDangerValue.assign(GC.getMapINLINE().numPlotsINLINE(), 0);
+	}
+	// the stamp combines search id and player, so a stale entry can never match
+	int iStamp = s_iPathSearchId * MAX_PLAYERS + (int)ePlayer;
+	if (s_aiPathDangerStamp[iIndex] != iStamp)
+	{
+		s_aiPathDangerStamp[iIndex] = iStamp;
+		s_aiPathDangerValue[iIndex] = GET_PLAYER(ePlayer).AI_getPlotDanger(pPlot);
+	}
+	return s_aiPathDangerValue[iIndex];
+}
+
 int pathDestValid(int iToX, int iToY, const void* pointer, FAStar* finder)
 {
 	PROFILE_FUNC();
+
+	// new path search: new cache generation (wraps safely, stamps are only compared for equality)
+	s_iPathSearchId++;
+	if (s_iPathSearchId > 20000000)
+	{
+		s_iPathSearchId = 0;
+		s_aiPathDangerStamp.clear();
+		s_aiPathDangerValue.clear();
+	}
 
 	CLLNode<IDInfo>* pUnitNode1;
 	CLLNode<IDInfo>* pUnitNode2;
@@ -1255,7 +1290,7 @@ int pathDestValid(int iToX, int iToY, const void* pointer, FAStar* finder)
 		{
 			if (!(pSelectionGroup->canFight()) && !(pSelectionGroup->alwaysInvisible()))
 			{
-				if (GET_PLAYER(pSelectionGroup->getHeadOwner()).AI_getPlotDanger(pToPlot) > 0)
+				if (getPathPlotDanger(pSelectionGroup->getHeadOwner(), pToPlot) > 0)
 				{
 					return FALSE;
 				}
@@ -1550,7 +1585,7 @@ int pathValid(FAStarNode* parent, FAStarNode* node, int data, const void* pointe
 			{
 				if (!(pSelectionGroup->canFight()) && !(pSelectionGroup->alwaysInvisible()))
 				{
-					if (GET_PLAYER(pSelectionGroup->getHeadOwner()).AI_getPlotDanger(pFromPlot) > 0)
+					if (getPathPlotDanger(pSelectionGroup->getHeadOwner(), pFromPlot) > 0)
 					{
 						return FALSE;
 					}

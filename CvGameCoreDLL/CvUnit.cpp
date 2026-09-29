@@ -4651,9 +4651,14 @@ void CvUnit::updatePlunder(int iChange, bool bUpdatePlotGroups)
 
 	bool bOldTradeNet;
 	bool bChanged = false;
+	// Performance (from VabiGEM): remember which teams' trade networks changed, so that only their plot
+	// groups are rebuilt instead of those of every player.
+	bool abTeamChanged[MAX_TEAMS];
 
 	for (int iTeam = 0; iTeam < MAX_TEAMS; ++iTeam)
 	{
+		abTeamChanged[iTeam] = false;
+
 		if (isEnemy((TeamTypes)iTeam))
 		{
 			for (int i = -iBlockadeRange; i <= iBlockadeRange; ++i)
@@ -4664,21 +4669,23 @@ void CvUnit::updatePlunder(int iChange, bool bUpdatePlotGroups)
 
 					if (NULL != pLoopPlot && pLoopPlot->isWater() && pLoopPlot->area() == area())
 					{
-						if (!bChanged)
+						if (!abTeamChanged[iTeam])
 						{
 							bOldTradeNet = pLoopPlot->isTradeNetwork((TeamTypes)iTeam);
 						}
 
 						pLoopPlot->changeBlockadedCount((TeamTypes)iTeam, iChange);
 
-						if (!bChanged)
+						if (!abTeamChanged[iTeam])
 						{
-							bChanged = (bOldTradeNet != pLoopPlot->isTradeNetwork((TeamTypes)iTeam));
+							abTeamChanged[iTeam] = (bOldTradeNet != pLoopPlot->isTradeNetwork((TeamTypes)iTeam));
 						}
 					}
 				}
 			}
 		}
+
+		bChanged = bChanged || abTeamChanged[iTeam];
 	}
 
 	if (bChanged)
@@ -4687,7 +4694,24 @@ void CvUnit::updatePlunder(int iChange, bool bUpdatePlotGroups)
 
 		if (bUpdatePlotGroups)
 		{
-			GC.getGameINLINE().updatePlotGroups();
+			// Same result as GC.getGameINLINE().updatePlotGroups(): the plot groups of the other teams do not
+			// depend on these blockades, but updatePlotGroups() also recalculated every player's trade routes
+			// (in this player order), so that is still done for all players.
+			for (int iPlayer = 0; iPlayer < MAX_PLAYERS; ++iPlayer)
+			{
+				CvPlayer& kLoopPlayer = GET_PLAYER((PlayerTypes)iPlayer);
+				if (kLoopPlayer.isAlive())
+				{
+					if (abTeamChanged[kLoopPlayer.getTeam()])
+					{
+						kLoopPlayer.updatePlotGroups();
+					}
+					else if (GC.getGameINLINE().isFinalInitialized())
+					{
+						kLoopPlayer.updateTradeRoutes();
+					}
+				}
+			}
 		}
 	}
 }
@@ -5214,7 +5238,8 @@ bool CvUnit::found()
 		return false;
 	}
 
-	if (GC.getGameINLINE().getActivePlayer() == getOwnerINLINE())
+	// no camera jump when the AI founds the city for the active player (AI takeover during auto-play)
+	if ((GC.getGameINLINE().getActivePlayer() == getOwnerINLINE()) && GET_PLAYER(getOwnerINLINE()).isHuman())
 	{
 		gDLL->getInterfaceIFace()->lookAt(plot()->getPoint(), CAMERALOOKAT_NORMAL);
 	}

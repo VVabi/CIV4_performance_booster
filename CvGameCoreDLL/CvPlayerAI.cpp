@@ -2695,38 +2695,62 @@ int CvPlayerAI::AI_getPlotDanger(CvPlot* pPlot, int iRange, bool bTestMoves) con
 		iRange = DANGER_RANGE;
 	}
 
+	// Performance: same result as the original loop, with the work that does not depend on the loop plot done
+	// once, and plots that cannot contribute skipped early:
+	// - the team and the plot's coordinates are read once
+	// - the border danger is only used for AI players and plots that are not cities (see the end)
+	// - a plot only contributes through its units, or (at distance 1, or 2 with a route) as a border plot of a
+	//   team at war with us, so all other plots are skipped before the area lookup
+	// - the distance is |iDX| or |iDY| when the range is less than half the map in both directions (then
+	//   stepDistance's wrapping cannot shorten it), else stepDistance as before
+	const TeamTypes eTeam = getTeam();
+	const int iPlotX = pPlot->getX_INLINE();
+	const int iPlotY = pPlot->getY_INLINE();
+	const bool bCountBorderDanger = (!isHuman() && !pPlot->isCity());
+	const bool bSimpleDistance = (2 * iRange < GC.getMapINLINE().getGridWidthINLINE() && 2 * iRange < GC.getMapINLINE().getGridHeightINLINE());
+
 	for (iDX = -(iRange); iDX <= iRange; iDX++)
 	{
 		for (iDY = -(iRange); iDY <= iRange; iDY++)
 		{
-			pLoopPlot	= plotXY(pPlot->getX_INLINE(), pPlot->getY_INLINE(), iDX, iDY);
+			pLoopPlot	= plotXY(iPlotX, iPlotY, iDX, iDY);
 
 			if (pLoopPlot != NULL)
 			{
+				iDistance = (bSimpleDistance ? std::max(abs(iDX), abs(iDY)) : stepDistance(iPlotX, iPlotY, pLoopPlot->getX_INLINE(), pLoopPlot->getY_INLINE()));
+
+				pUnitNode = pLoopPlot->headUnitNode();
+
+				const bool bBorderPlot = (bCountBorderDanger && (iDistance == 1 || iDistance == 2));
+
+				if (pUnitNode == NULL && !bBorderPlot)
+				{
+					continue;
+				}
+
 				if (pLoopPlot->area() == pPlotArea)
 				{
-				    iDistance = stepDistance(pPlot->getX_INLINE(), pPlot->getY_INLINE(), pLoopPlot->getX_INLINE(), pLoopPlot->getY_INLINE());
-				    if (atWar(pLoopPlot->getTeam(), getTeam()))
-				    {
-				        if (iDistance == 1)
-				        {
-				            iBorderDanger++;
-				        }
-				        else if ((iDistance == 2) && (pLoopPlot->isRoute()))
-				        {
-				            iBorderDanger++;
-				        }
-				    }
-
-
-					pUnitNode = pLoopPlot->headUnitNode();
+					if (bBorderPlot)
+					{
+						if (atWar(pLoopPlot->getTeam(), eTeam))
+						{
+							if (iDistance == 1)
+							{
+								iBorderDanger++;
+							}
+							else if ((iDistance == 2) && (pLoopPlot->isRoute()))
+							{
+								iBorderDanger++;
+							}
+						}
+					}
 
 					while (pUnitNode != NULL)
 					{
 						pLoopUnit = ::getUnit(pUnitNode->m_data);
 						pUnitNode = pLoopPlot->nextUnitNode(pUnitNode);
 
-						if (pLoopUnit->isEnemy(getTeam()))
+						if (pLoopUnit->isEnemy(eTeam))
 						{
 							if (pLoopUnit->canAttack())
 							{

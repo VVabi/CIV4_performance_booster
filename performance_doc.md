@@ -99,6 +99,17 @@ Used by `AI_addBestCitizen`, `AI_removeWorstCitizen`, `AI_juggleCitizens` (worst
 `AI_yieldValue` 13.2 s -> 9.1 s (good tiles/specialists) -> 5.5 s (food values); worker planning together
 with the removed profiler scopes: DLL 78.6 s -> 71.1 s; juggling: `AI_yieldValue` 10.9 s -> 9.5 s (500-turn run).
 
+### `CvPlayerAI::AI_getPlotDanger` (no cache)
+The function loops over the (2 * range + 1)^2 plots around the plot (81 for the default range 4) and was 9% of the
+DLL time on the large map (9.6M calls per 26 rounds). Same result, less work per plot: the team and coordinates
+are read once; the border danger (only added for AI players and non-city plots) is only evaluated at distance 1
+or 2; plots without units that cannot be border plots are skipped before the area lookup; the distance is
+`max(|dx|, |dy|)` when the range is less than half the map in both directions (then the wrapping in
+`stepDistance` cannot shorten it), else `stepDistance`. A cache across searches (like VabiGEM's) was looked at
+and dropped: `canMoveInto` reads too much state (fortify state of defenders, mission AI of the group, force
+peace, permanent war/peace, area border obstacles, the Python callback, ...) to cover with a list of
+invalidating changes.
+
 ### Smaller algorithmic changes
 - `CvPlayerAI::AI_baseBonusVal`: skips `canConstruct()` for buildings that do not use the bonus (their value
   is 0 and the following code only multiplies, divides or zeroes it). 5.6 s -> 1.0 s.

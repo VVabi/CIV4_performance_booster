@@ -2051,15 +2051,39 @@ int pathAdd(FAStarNode* parent, FAStarNode* node, int data, const void* pointer,
 			iTurns++;
 		}
 
-		for (CLLNode<IDInfo>* pUnitNode = pSelectionGroup->headUnitNode(); pUnitNode != NULL; pUnitNode = pSelectionGroup->nextUnitNode(pUnitNode))
+		if (pointer == s_pPathGroup)
 		{
-			CvUnit* pLoopUnit = ::getUnit(pUnitNode->m_data);
+			// Performance: same values as the loop below, for the group that started the search. iMoves is the
+			// minimum over the units, so only the first unit of each class of equivalent units (see
+			// s_aiPathUnitClass) is needed; the moves come from the per-search unit values, and for a single unit
+			// the step cost is the one pathCost just used for the same step (getPathStepCost).
+			// (Not for the initial add, which may come before the search is set up by pathDestValid.)
+			updatePathGroupFlags(pSelectionGroup);
+			const bool bSingleUnit = (s_iPathGroupNumUnits == 1);
+			const int iNumUnits = (int)s_aPathUnits.size();
+			for (int iUnit = 0; iUnit < iNumUnits; iUnit++)
+			{
+				const PathUnitInfo& kUnit = s_aPathUnits[iUnit];
 
-			int iUnitMoves = (iStartMoves == 0 ? pLoopUnit->maxMoves() : iStartMoves);
-			iUnitMoves -= pToPlot->movementCost(pLoopUnit, pFromPlot);
-			iUnitMoves = std::max(iUnitMoves, 0);
-			
-			iMoves = std::min(iMoves, iUnitMoves);
+				int iUnitMoves = (iStartMoves == 0 ? kUnit.iMaxMoves : iStartMoves);
+				iUnitMoves -= (bSingleUnit ? getPathStepCost(kUnit.pUnit, pFromPlot, pToPlot) : pToPlot->movementCost(kUnit.pUnit, pFromPlot));
+				iUnitMoves = std::max(iUnitMoves, 0);
+
+				iMoves = std::min(iMoves, iUnitMoves);
+			}
+		}
+		else
+		{
+			for (CLLNode<IDInfo>* pUnitNode = pSelectionGroup->headUnitNode(); pUnitNode != NULL; pUnitNode = pSelectionGroup->nextUnitNode(pUnitNode))
+			{
+				CvUnit* pLoopUnit = ::getUnit(pUnitNode->m_data);
+
+				int iUnitMoves = (iStartMoves == 0 ? pLoopUnit->maxMoves() : iStartMoves);
+				iUnitMoves -= pToPlot->movementCost(pLoopUnit, pFromPlot);
+				iUnitMoves = std::max(iUnitMoves, 0);
+
+				iMoves = std::min(iMoves, iUnitMoves);
+			}
 		}
 	}
 

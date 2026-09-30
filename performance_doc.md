@@ -59,6 +59,11 @@ compared for equality, so wrap-around is safe). Caches are only used for the gro
   group's domain, plot, head team, head owner and `AI_isControlled()` from per-search variables instead of
   looking up the group's head unit on every call. Groups other than the one that started the search (none
   seen) use the old per-call calculation. Nothing changes during a search, so the results are the same.
+- **`pathAdd`** (every node except the initial add): for the group that started the search it uses the same
+  per-search values: only the first unit of each class (the result is the minimum over the units, and equivalent
+  units give the same value), `iMaxMoves` from `PathUnitInfo`, and for a single unit the cached step cost
+  (`getPathStepCost`, the value `pathCost` just used for the same step) instead of `movementCost` for every unit.
+  The initial add keeps the old code (it may come before `pathDestValid` sets up the search).
 - **Search flags** in `pathValid`: `GetInfo(finder)` (a call into the exe) is read once per call instead of up
   to four times; the flags do not change during a search. Not measurable on the large map (~0.5%).
 

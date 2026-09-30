@@ -833,22 +833,22 @@ void CvPlot::verifyUnitValidPlot()
 {
 	PROFILE_FUNC();
 	
-	std::vector<CvUnit*> aUnits;
+	// Bug fix (from VabiGEM): keep unit IDs, not pointers. Moving a unit can delete other units of this plot
+	// (a transport without a valid plot dies with its cargo; a unit bumped onto a fogged plot with enemy units
+	// captures or bumps them, which can chain back to this plot), so every unit is looked up again before use.
+	// The dangling pointers could crash, e.g. when declaring a second war.
+	std::vector<IDInfo> aUnits;
 	CLLNode<IDInfo>* pUnitNode = headUnitNode();
 	while (pUnitNode != NULL)
 	{
-		CvUnit* pLoopUnit = ::getUnit(pUnitNode->m_data);
+		aUnits.push_back(pUnitNode->m_data);
 		pUnitNode = nextUnitNode(pUnitNode);
-		if (NULL != pLoopUnit)
-		{
-			aUnits.push_back(pLoopUnit);
-		}
 	}
 
-	std::vector<CvUnit*>::iterator it = aUnits.begin();
+	std::vector<IDInfo>::iterator it = aUnits.begin();
 	while (it != aUnits.end())
 	{
-		CvUnit* pLoopUnit = *it;
+		CvUnit* pLoopUnit = ::getUnit(*it);
 		bool bErased = false;
 
 		if (pLoopUnit != NULL)
@@ -886,7 +886,7 @@ void CvPlot::verifyUnitValidPlot()
 		it = aUnits.begin();
 		while (it != aUnits.end())
 		{
-			CvUnit* pLoopUnit = *it;
+			CvUnit* pLoopUnit = ::getUnit(*it);
 			bool bErased = false;
 
 			if (pLoopUnit != NULL)

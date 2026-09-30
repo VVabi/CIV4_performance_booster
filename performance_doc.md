@@ -4,15 +4,12 @@ Base: original BtS 3.19 SDK (`708bd95`). All performance changes are marked in t
 `Performance:` comment; auto-play tooling is marked with `AI takeover` / `CIV4_performance_booster`.
 
 **Rule:** a performance change is only accepted if it does not change the game. Each one was verified
-with a fixed-seed A/B auto-play run: scenario `performance_tester.CivBeyondSwordWBSave`,
-`FIXED_RANDOM_SEED` = 12345, and the per-turn lines of `Logs\AutoPlay.log` (random seed + totals) must be
-identical to the reference (ignoring the "(turn slice ...)" part). The reference is
-`My Games\Beyond the Sword\Logs\Reference_500turns\` (AutoPlay.log + VabiProfile.log, 500 turns).
-Civ4 clears `Logs` at startup, so copy logs away before the next run.
+with a fixed-seed A/B auto-play run: loaded same savegame in both saves, ran for 500 turns and compared results.
 
 Result of all changes on the 500-turn reference run: 194.8 s wall clock, 141.4 s in the DLL
-(commit `18fff19`). Per-change figures below are from the commit messages (different runs, so they do
-not add up exactly).
+(commit `18fff19`, which still contained the religion and city target skips; they were removed later, see
+`inexact_targets.md`; the game is identical, the time may be slightly different). Per-change figures below are
+from the commit messages (different runs, so they do not add up exactly).
 
 ## Switches (`Assets/XML/GlobalDefinesAlt.xml`)
 
@@ -45,12 +42,11 @@ compared for equality, so wrap-around is safe). Caches are only used for the gro
 - **Step movement cost** in `pathCost` (single-unit groups) and the **defense modifier** of a plot for the
   group's team. `generatePath` ~24 s -> 17.2 s together with the `pathValid` caches; DLL 84.4 s -> 78.6 s.
 
-### Skipping hopeless targets before path searches (`CvUnitAI.cpp`)
-The value of a target can only shrink with the path length, so targets whose value with the shortest
-possible path cannot beat the best one so far are skipped before the expensive path and build searches.
-- `AI_spreadReligion`: the path-independent part of the value is computed first (`iBaseValue`).
-- `AI_nextCityToImprove`: the value is at most `iValue * 1000` (x2 for the capital), so cities that
-  cannot beat the best are skipped before `AI_bestCityBuild`.
+### Skipping path searches is NOT done (see `inexact_targets.md`)
+"Skip hopeless targets before the path search" shortcuts are not exact: path searches with `bReuse` depend on
+which searches ran before them. `AI_spreadReligion`, `AI_nextCityToImprove` (both were in `2fdecff`) and the
+`AI_pillage` skip (never committed) were removed or not added; both functions are identical to the original
+SDK again. Details and numbers: `inexact_targets.md`.
 
 ### Unit upgrades (`CvUnitAI::AI_upgrade`)
 Only taken when the owner's strategies are already cached for this turn (`AI_isStrategyHashCached`).
@@ -135,6 +131,12 @@ ends. The game never reads these symbols. Not used in network multiplayer. Symbo
   `CvPlayer::doTurn`, `CvCityAI::AI_doTurn`, `AI_yieldValue` and parts of `AI_plotValue`.
 - Path searches are listed by calling function (`path <- <caller>`, `VabiProfCallerSample` in
   `CvSelectionGroup::generatePath`) and the run summary lists all `x <- caller` samples.
+- **Path finder callbacks**: `pathCost`, `pathValid` and `pathAdd` have scopes while
+  `VABI_PROFILE_PATH_CALLBACKS` is 1 (top of the path finder section in `CvGameCoreUtils.cpp`, Timing build
+  only). They run inside the exe's `GeneratePath`, so without them their time is part of the self time of
+  `CvSelectionGroup::generatePath()`. They are called for every expanded node, so they distort the rest of the
+  profile: use them to split `generatePath`'s time, then set the define to 0 for undistorted timings.
+  `pathHeuristic` is never marked.
 - Scopes were removed from tiny functions called millions of times (`AI_plotValid`, `canBuild`, `canTrain`,
   `getBestRoute`, `isCoastalLand`, `calculateImprovementYieldChange`, `pathAdd`, two explore loops): their
   overhead distorted the Timing build.
@@ -142,6 +144,16 @@ ends. The game never reads these symbols. Not used in network multiplayer. Symbo
   private/working set, committed memory by type, C runtime heap (slow with many blocks), page faults,
   file I/O, game object counts and Python object count (`vabiPythonObjectCount` in `CvAppInterface.py`).
   Off it only reads the define once per turn.
+
+## Bug fixes (ported from VabiGEM)
+
+### Crash when units are bumped after a war declaration (`CvPlot::verifyUnitValidPlot`)
+The function collected `CvUnit*` pointers of all units on the plot and then moved them away with
+`jumpToNearestValidPlot()`. Moving a unit can delete other units of the plot (a transport without a valid
+plot dies with its cargo; a unit bumped onto a fogged plot with enemy units captures or bumps them, which can
+chain back to this plot), which left dangling pointers and could crash, e.g. when declaring a second war. It
+now keeps `IDInfo` and looks each unit up again (`::getUnit`) before use. The result is the same whenever
+vanilla did not crash.
 
 ## Workflow for a new optimization
 1. Argue exactness (same choices, same random draws, same order of lazy caches such as the strategy hash).

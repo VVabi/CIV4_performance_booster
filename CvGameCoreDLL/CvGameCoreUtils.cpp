@@ -1337,6 +1337,18 @@ static int getPathDefenseModifier(const CvPlot* pPlot, TeamTypes eTeam)
 	return s_aiPathDefenseValue[iIndex];
 }
 
+// Timing build only: profiler scopes for the A* callbacks pathCost, pathValid and pathAdd. They run inside the
+// exe's GeneratePath, so without them their time is booked as self time of CvSelectionGroup::generatePath().
+// They are called for every expanded node (millions of times per turn), so the scopes distort the rest of the
+// profile (and the total time): use them to split generatePath's time, then set this to 0 for undistorted timings.
+// pathHeuristic is never marked (a one-line function, the scope would cost more than the function).
+#define VABI_PROFILE_PATH_CALLBACKS 0
+#if VABI_PROFILE_PATH_CALLBACKS
+#define PROFILE_PATH_CALLBACK() PROFILE_FUNC()
+#else
+#define PROFILE_PATH_CALLBACK()
+#endif
+
 int pathDestValid(int iToX, int iToY, const void* pointer, FAStar* finder)
 {
 	PROFILE_FUNC();
@@ -1475,6 +1487,8 @@ int pathHeuristic(int iFromX, int iFromY, int iToX, int iToY)
 
 int pathCost(FAStarNode* parent, FAStarNode* node, int data, const void* pointer, FAStar* finder)
 {
+	PROFILE_PATH_CALLBACK();
+
 	CLLNode<IDInfo>* pUnitNode;
 	CvSelectionGroup* pSelectionGroup;
 	CvUnit* pLoopUnit;
@@ -1621,6 +1635,8 @@ int pathCost(FAStarNode* parent, FAStarNode* node, int data, const void* pointer
 
 int pathValid(FAStarNode* parent, FAStarNode* node, int data, const void* pointer, FAStar* finder)
 {
+	PROFILE_PATH_CALLBACK();
+
 	CvSelectionGroup* pSelectionGroup;
 	CvPlot* pFromPlot;
 	CvPlot* pToPlot;
@@ -1725,6 +1741,7 @@ int pathValid(FAStarNode* parent, FAStarNode* node, int data, const void* pointe
 
 int pathAdd(FAStarNode* parent, FAStarNode* node, int data, const void* pointer, FAStar* finder)
 {
+	PROFILE_PATH_CALLBACK();
 
 	CvSelectionGroup* pSelectionGroup = ((CvSelectionGroup *)pointer);
 	FAssert(pSelectionGroup->getNumUnits() > 0);

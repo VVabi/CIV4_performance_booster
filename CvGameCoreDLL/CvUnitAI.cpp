@@ -8637,60 +8637,6 @@ bool CvUnitAI::AI_spreadReligion()
 
 					if (AI_plotValid(pLoopCity->plot()) && pLoopCity->area() == area())
 					{
-						// the part of the value that does not depend on the path (moved before the path search)
-						int iBaseValue = (7 + (pLoopCity->getPopulation() * 4));
-
-						bool bOurCity = false;
-						if (pLoopCity->getOwnerINLINE() == getOwnerINLINE())
-						{
-							iBaseValue *= (bCultureVictory ? 16 : 4);
-							bOurCity = true;
-						}
-						else if (pLoopCity->getTeam() == getTeam())
-						{
-							iBaseValue *= 3;
-							bOurCity = true;
-						}
-						else
-						{
-							iBaseValue *= iPlayerMultiplierPercent;
-							iBaseValue /= 100;
-						}
-
-						int iCityReligionCount = pLoopCity->getReligionCount();
-						int iReligionCountFactor = iCityReligionCount;
-
-						if (bOurCity)
-						{
-							// count cities with no religion the same as cities with 2 religions
-							// prefer a city with exactly 1 religion already
-							if (iCityReligionCount == 0)
-							{
-								iReligionCountFactor = 2;
-							}
-							else if (iCityReligionCount == 1)
-							{
-								iBaseValue *= 2;
-							}
-						}
-						else
-						{
-							// absolutely prefer cities with zero religions
-							if (iCityReligionCount == 0)
-							{
-								iBaseValue *= 2;
-							}
-
-							// not our city, so prefer the lowest number of religions (increment so no divide by zero)
-							iReligionCountFactor++;
-						}
-
-						iBaseValue /= iReligionCountFactor;
-
-						// Performance: the final value is iBaseValue * 1000 / (iPathTurns + 2) with iPathTurns >= 0, so it
-						// is at most iBaseValue * 1000 / 2. If even that cannot beat the best city so far, the path
-						// search and the other checks cannot change the result. (Humans get an extra factor below.)
-						if (isHuman() || ((iBaseValue * 1000) / 2) > iBestValue)
 						if (canSpread(pLoopCity->plot(), eReligion))
 						{
 							if (!(pLoopCity->plot()->isVisibleEnemyUnit(this)))
@@ -8699,7 +8645,54 @@ bool CvUnitAI::AI_spreadReligion()
 								{
 									if (generatePath(pLoopCity->plot(), 0, true, &iPathTurns))
 									{
-										iValue = iBaseValue;
+										iValue = (7 + (pLoopCity->getPopulation() * 4));
+
+										bool bOurCity = false;
+										if (pLoopCity->getOwnerINLINE() == getOwnerINLINE())
+										{
+											iValue *= (bCultureVictory ? 16 : 4);
+											bOurCity = true;
+										}
+										else if (pLoopCity->getTeam() == getTeam())
+										{
+											iValue *= 3;
+											bOurCity = true;
+										}
+										else
+										{
+											iValue *= iPlayerMultiplierPercent;
+											iValue /= 100;
+										}
+										
+										int iCityReligionCount = pLoopCity->getReligionCount();
+										int iReligionCountFactor = iCityReligionCount;
+
+										if (bOurCity)
+										{
+											// count cities with no religion the same as cities with 2 religions
+											// prefer a city with exactly 1 religion already
+											if (iCityReligionCount == 0)
+											{
+												iReligionCountFactor = 2;
+											}
+											else if (iCityReligionCount == 1)
+											{
+												iValue *= 2;
+											}
+										}
+										else
+										{
+											// absolutely prefer cities with zero religions
+											if (iCityReligionCount == 0)
+											{
+												iValue *= 2;
+											}
+
+											// not our city, so prefer the lowest number of religions (increment so no divide by zero)
+											iReligionCountFactor++;
+										}
+
+										iValue /= iReligionCountFactor;
 
 										FAssert(iPathTurns > 0);
 										
@@ -13488,10 +13481,7 @@ bool CvUnitAI::AI_nextCityToImprove(CvCity* pCity)
 			iValue *= (iWorkersNeeded + 1);
 			iValue /= (iWorkersHave + 1);
 
-			// Performance: the final value is iValue * 1000 (* 2 for the capital) / (iPathTurns + 1) with
-			// iPathTurns >= 0, so it is at most iValue * 1000 (* 2). If even that cannot beat the best city so far,
-			// the build search (which runs its own path searches) and the path search cannot change the result.
-			if (iValue > 0 && (iValue * 1000 * (pLoopCity->isCapital() ? 2 : 1)) > iBestValue)
+			if (iValue > 0)
 			{
 				if (AI_bestCityBuild(pLoopCity, &pPlot, &eBuild, NULL, this))
 				{

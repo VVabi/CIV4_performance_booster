@@ -52,6 +52,13 @@ compared for equality, so wrap-around is safe). Caches are only used for the gro
   average ~40 units). Result (large map, turns 600-626, identical random seeds): 324M of the 511M multi-unit
   evaluations skipped (63%); 325.8 s -> 293.8 s wall clock (12.53 -> 11.30 s per round). On the 500-turn
   scenario half of the multi-unit evaluations are skipped, but few groups are large there (no visible gain).
+- **Per-search unit and group values** (`PathUnitInfo`, `updatePathGroupFlags`): `pathCost` no longer looks up
+  the units of the group and asks each one for its moves, combat ability, team, river and defensive bonus on
+  every call: these values are calculated once per search for the units that are evaluated (the first of each
+  class) and kept in `s_aPathUnits`; the per-unit body is `pathCostUnit`. `pathValid` (and `pathCost`) read the
+  group's domain, plot, head team, head owner and `AI_isControlled()` from per-search variables instead of
+  looking up the group's head unit on every call. Groups other than the one that started the search (none
+  seen) use the old per-call calculation. Nothing changes during a search, so the results are the same.
 - **Search flags** in `pathValid`: `GetInfo(finder)` (a call into the exe) is read once per call instead of up
   to four times; the flags do not change during a search. Not measurable on the large map (~0.5%).
 

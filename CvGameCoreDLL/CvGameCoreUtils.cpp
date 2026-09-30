@@ -1341,6 +1341,39 @@ static void updatePathUnitClasses(CvSelectionGroup* pSelectionGroup)
 	}
 }
 
+// Performance: what pathCost reads from a unit, calculated once per search for the group that started it (none of
+// it changes during a search) instead of on every call (every call is for one step of the search)
+struct PathUnitInfo
+{
+	CvUnit* pUnit;
+	int iMaxMoves;
+	TeamTypes eTeam;
+	bool bCanFight;
+	bool bCanAttack;
+	bool bNoDefensiveBonus;
+	bool bRiver;
+};
+
+static void fillPathUnitInfo(PathUnitInfo& kInfo, CvUnit* pUnit)
+{
+	kInfo.pUnit = pUnit;
+	kInfo.iMaxMoves = pUnit->maxMoves();
+	kInfo.eTeam = pUnit->getTeam();
+	kInfo.bCanFight = pUnit->canFight();
+	kInfo.bCanAttack = pUnit->canAttack();
+	kInfo.bNoDefensiveBonus = pUnit->noDefensiveBonus();
+	kInfo.bRiver = pUnit->isRiver();
+}
+
+// the units pathCost evaluates: the first unit of each class (see s_aiPathUnitClass), in the order of the group
+static std::vector<PathUnitInfo> s_aPathUnits;
+// properties of the group itself, used by pathValid and pathCost (each of them looks up the group's head unit)
+static CvPlot* s_pPathGroupPlot = NULL;
+static DomainTypes s_ePathGroupDomain = NO_DOMAIN;
+static TeamTypes s_ePathGroupHeadTeam = NO_TEAM;
+static PlayerTypes s_ePathGroupHeadOwner = NO_PLAYER;
+static bool s_bPathGroupAIControlled = false;
+
 static void updatePathGroupFlags(CvSelectionGroup* pSelectionGroup)
 {
 	if (s_iPathGroupFlagsId != s_iPathSearchId)
@@ -1349,7 +1382,28 @@ static void updatePathGroupFlags(CvSelectionGroup* pSelectionGroup)
 		s_bPathGroupCanFight = pSelectionGroup->canFight();
 		s_bPathGroupAlwaysInvisible = pSelectionGroup->alwaysInvisible();
 		s_iPathGroupNumUnits = pSelectionGroup->getNumUnits();
+		s_pPathGroupPlot = pSelectionGroup->plot();
+		s_ePathGroupDomain = pSelectionGroup->getDomainType();
+		s_ePathGroupHeadTeam = pSelectionGroup->getHeadTeam();
+		s_ePathGroupHeadOwner = pSelectionGroup->getHeadOwner();
+		s_bPathGroupAIControlled = pSelectionGroup->AI_isControlled();
 		updatePathUnitClasses(pSelectionGroup);
+
+		s_aPathUnits.clear();
+		const bool bUseClasses = (s_iPathGroupNumUnits > 1 && (int)s_aiPathUnitClass.size() == s_iPathGroupNumUnits);
+		int iUnitIndex = -1;
+		for (CLLNode<IDInfo>* pUnitNode = pSelectionGroup->headUnitNode(); pUnitNode != NULL; pUnitNode = pSelectionGroup->nextUnitNode(pUnitNode))
+		{
+			CvUnit* pLoopUnit = ::getUnit(pUnitNode->m_data);
+			iUnitIndex++;
+			if (bUseClasses && s_aiPathUnitClass[iUnitIndex] != iUnitIndex)
+			{
+				continue;
+			}
+			PathUnitInfo kInfo;
+			fillPathUnitInfo(kInfo, pLoopUnit);
+			s_aPathUnits.push_back(kInfo);
+		}
 	}
 }
 
@@ -1581,7 +1635,7 @@ int pathHeuristic(int iFromX, int iFromY, int iToX, int iToY)
 // Timing build only, plain counters (no timers, so almost no overhead): how many units the groups of the pathCost
 // calls have and how many of the step cost evaluations bypass the per-search cache (multi-unit groups and groups
 // other than the one that started the search). Cumulative line in Logs\PathStepCounters.log every 2M calls.
-#define VABI_PATH_COUNTERS 1
+#define VABI_PATH_COUNTERS 0
 #if defined(VABI_PROFILE) && VABI_PATH_COUNTERS
 static __int64 s_iPathUnitEvalsSkipped = 0;	// unit evaluations skipped because an equivalent unit was already evaluated
 
@@ -1649,21 +1703,123 @@ static void vabiPathCountCall(CvSelectionGroup* pGroup, bool bCached)
 }
 #endif
 
+// Performance: the evaluation of one unit in pathCost (the body of the loop over the group's units). The unit
+// values are passed in (kUnit): for the group that started the search they are calculated once per search, see
+// updatePathGroupFlags.
+static void pathCostUnit(const PathUnitInfo& kUnit, FAStarNode* parent, CvPlot* pFromPlot, CvPlot* pToPlot, FAStar* finder, bool bAIControlled, bool bPathCache, int& iWorstCost, int& iWorstMovesLeft, int& iWorstMax)
+{
+	int iCost;
+	int iMovesLeft;
+	int iMax;
+
+	FAssertMsg(kUnit.pUnit->getDomainType() != DOMAIN_AIR, "pLoopUnit->getDomainType() is not expected to be equal with DOMAIN_AIR");
+
+	if (parent->m_iData1 > 0)
+	{
+		iMax = parent->m_iData1;
+	}
+	else
+	{
+		iMax = kUnit.iMaxMoves;
+	}
+
+	{
+		PROFILE_PATH_SECTION("pathCost: step cost");
+		iCost = (bPathCache && s_iPathGroupNumUnits == 1) ? getPathStepCost(kUnit.pUnit, pFromPlot, pToPlot) : pToPlot->movementCost(kUnit.pUnit, pFromPlot);
+	}
+
+	iMovesLeft = std::max(0, (iMax - iCost));
+
+	if (iMovesLeft <= iWorstMovesLeft)
+	{
+		if ((iMovesLeft < iWorstMovesLeft) || (iMax <= iWorstMax))
+		{
+			if (iMovesLeft == 0)
+			{
+				iCost = (PATH_MOVEMENT_WEIGHT * iMax);
+
+				if (pToPlot->getTeam() != kUnit.eTeam)
+				{
+					iCost += PATH_TERRITORY_WEIGHT;
+				}
+
+				// Damage caused by features (mods)
+				if (0 != GC.getPATH_DAMAGE_WEIGHT())
+				{
+					if (pToPlot->getFeatureType() != NO_FEATURE)
+					{
+						iCost += (GC.getPATH_DAMAGE_WEIGHT() * std::max(0, GC.getFeatureInfo(pToPlot->getFeatureType()).getTurnDamage())) / GC.getMAX_HIT_POINTS();
+					}
+
+					if (pToPlot->getExtraMovePathCost() > 0)
+					{
+						iCost += (PATH_MOVEMENT_WEIGHT * pToPlot->getExtraMovePathCost());
+					}
+				}
+			}
+			else
+			{
+				iCost = (PATH_MOVEMENT_WEIGHT * iCost);
+			}
+
+			if (kUnit.bCanFight)
+			{
+				if (iMovesLeft == 0)
+				{
+					PROFILE_PATH_SECTION("pathCost: defense modifier");
+					iCost += (PATH_DEFENSE_WEIGHT * std::max(0, (200 - ((kUnit.bNoDefensiveBonus) ? 0 : (bPathCache ? getPathDefenseModifier(pToPlot, kUnit.eTeam) : pToPlot->defenseModifier(kUnit.eTeam, false))))));
+				}
+
+				if (bAIControlled)
+				{
+					PROFILE_PATH_SECTION("pathCost: attack checks");
+					if (kUnit.bCanAttack)
+					{
+						if (gDLL->getFAStarIFace()->IsPathDest(finder, pToPlot->getX_INLINE(), pToPlot->getY_INLINE()))
+						{
+							if (pToPlot->isVisibleEnemyDefender(kUnit.pUnit))
+							{
+								iCost += (PATH_DEFENSE_WEIGHT * std::max(0, (200 - ((kUnit.bNoDefensiveBonus) ? 0 : pFromPlot->defenseModifier(kUnit.eTeam, false)))));
+
+								if (!(pFromPlot->isCity()))
+								{
+									iCost += PATH_CITY_WEIGHT;
+								}
+
+								if (pFromPlot->isRiverCrossing(directionXY(pFromPlot, pToPlot)))
+								{
+									if (!kUnit.bRiver)
+									{
+										iCost += (PATH_RIVER_WEIGHT * -(GC.getRIVER_ATTACK_MODIFIER()));
+										iCost += (PATH_MOVEMENT_WEIGHT * iMovesLeft);
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+
+			if (iCost < iWorstCost)
+			{
+				iWorstCost = iCost;
+				iWorstMovesLeft = iMovesLeft;
+				iWorstMax = iMax;
+			}
+		}
+	}
+}
+
 int pathCost(FAStarNode* parent, FAStarNode* node, int data, const void* pointer, FAStar* finder)
 {
 	PROFILE_PATH_CALLBACK();
 
-	CLLNode<IDInfo>* pUnitNode;
 	CvSelectionGroup* pSelectionGroup;
-	CvUnit* pLoopUnit;
 	CvPlot* pFromPlot;
 	CvPlot* pToPlot;
 	int iWorstCost;
-	int iCost;
 	int iWorstMovesLeft;
-	int iMovesLeft;
 	int iWorstMax;
-	int iMax;
 
 	pFromPlot = GC.getMapINLINE().plotSorenINLINE(parent->m_iX, parent->m_iY);
 	FAssert(pFromPlot != NULL);
@@ -1672,134 +1828,45 @@ int pathCost(FAStarNode* parent, FAStarNode* node, int data, const void* pointer
 
 	pSelectionGroup = ((CvSelectionGroup *)pointer);
 
-	// Performance: per-search caches only for the group that started the search
-	bool bPathCache = (pointer == s_pPathGroup);
-	if (bPathCache)
-	{
-		updatePathGroupFlags(pSelectionGroup);
-	}
-
-#if defined(VABI_PROFILE) && VABI_PATH_COUNTERS
-	vabiPathCountCall(pSelectionGroup, bPathCache);
-#endif
-
 	iWorstCost = MAX_INT;
 	iWorstMovesLeft = MAX_INT;
 	iWorstMax = MAX_INT;
 
-	// Performance: only the first unit of each class of equivalent units is evaluated (see s_aiPathUnitClass)
-	const bool bUseClasses = (bPathCache && s_iPathGroupNumUnits > 1 && (int)s_aiPathUnitClass.size() == s_iPathGroupNumUnits);
-	int iUnitIndex = -1;
-
-	pUnitNode = pSelectionGroup->headUnitNode();
-
-	while (pUnitNode != NULL)
+	// Performance: per-search caches only for the group that started the search
+	if (pointer == s_pPathGroup)
 	{
-		pLoopUnit = ::getUnit(pUnitNode->m_data);
-		pUnitNode = pSelectionGroup->nextUnitNode(pUnitNode);
-		iUnitIndex++;
-		if (bUseClasses && s_aiPathUnitClass[iUnitIndex] != iUnitIndex)
-		{
+		updatePathGroupFlags(pSelectionGroup);
+
 #if defined(VABI_PROFILE) && VABI_PATH_COUNTERS
-			s_iPathUnitEvalsSkipped++;
+		vabiPathCountCall(pSelectionGroup, true);
+		s_iPathUnitEvalsSkipped += s_iPathGroupNumUnits - (int)s_aPathUnits.size();
 #endif
-			continue;
-		}
-		FAssertMsg(pLoopUnit->getDomainType() != DOMAIN_AIR, "pLoopUnit->getDomainType() is not expected to be equal with DOMAIN_AIR");
 
-		if (parent->m_iData1 > 0)
+		// only the first unit of each class of equivalent units is in s_aPathUnits (see s_aiPathUnitClass),
+		// with its values (moves, combat ability, team, ...) calculated once per search
+		const int iNumUnits = (int)s_aPathUnits.size();
+		for (int iUnit = 0; iUnit < iNumUnits; iUnit++)
 		{
-			iMax = parent->m_iData1;
+			pathCostUnit(s_aPathUnits[iUnit], parent, pFromPlot, pToPlot, finder, s_bPathGroupAIControlled, true, iWorstCost, iWorstMovesLeft, iWorstMax);
 		}
-		else
+	}
+	else
+	{
+#if defined(VABI_PROFILE) && VABI_PATH_COUNTERS
+		vabiPathCountCall(pSelectionGroup, false);
+#endif
+
+		const bool bAIControlled = pSelectionGroup->AI_isControlled();
+		CLLNode<IDInfo>* pUnitNode = pSelectionGroup->headUnitNode();
+
+		while (pUnitNode != NULL)
 		{
-			iMax = pLoopUnit->maxMoves();
-		}
+			CvUnit* pLoopUnit = ::getUnit(pUnitNode->m_data);
+			pUnitNode = pSelectionGroup->nextUnitNode(pUnitNode);
 
-		{
-			PROFILE_PATH_SECTION("pathCost: step cost");
-			iCost = (bPathCache && s_iPathGroupNumUnits == 1) ? getPathStepCost(pLoopUnit, pFromPlot, pToPlot) : pToPlot->movementCost(pLoopUnit, pFromPlot);
-		}
-
-		iMovesLeft = std::max(0, (iMax - iCost));
-
-		if (iMovesLeft <= iWorstMovesLeft)
-		{
-			if ((iMovesLeft < iWorstMovesLeft) || (iMax <= iWorstMax))
-			{
-				if (iMovesLeft == 0)
-				{
-					iCost = (PATH_MOVEMENT_WEIGHT * iMax);
-
-					if (pToPlot->getTeam() != pLoopUnit->getTeam())
-					{
-						iCost += PATH_TERRITORY_WEIGHT;
-					}
-
-					// Damage caused by features (mods)
-					if (0 != GC.getPATH_DAMAGE_WEIGHT())
-					{
-						if (pToPlot->getFeatureType() != NO_FEATURE)
-						{
-							iCost += (GC.getPATH_DAMAGE_WEIGHT() * std::max(0, GC.getFeatureInfo(pToPlot->getFeatureType()).getTurnDamage())) / GC.getMAX_HIT_POINTS();
-						}
-
-						if (pToPlot->getExtraMovePathCost() > 0)
-						{
-							iCost += (PATH_MOVEMENT_WEIGHT * pToPlot->getExtraMovePathCost());
-						}
-					}
-				}
-				else
-				{
-					iCost = (PATH_MOVEMENT_WEIGHT * iCost);
-				}
-
-				if (pLoopUnit->canFight())
-				{
-					if (iMovesLeft == 0)
-					{
-						PROFILE_PATH_SECTION("pathCost: defense modifier");
-						iCost += (PATH_DEFENSE_WEIGHT * std::max(0, (200 - ((pLoopUnit->noDefensiveBonus()) ? 0 : (bPathCache ? getPathDefenseModifier(pToPlot, pLoopUnit->getTeam()) : pToPlot->defenseModifier(pLoopUnit->getTeam(), false))))));
-					}
-
-					if (pSelectionGroup->AI_isControlled())
-					{
-						PROFILE_PATH_SECTION("pathCost: attack checks");
-						if (pLoopUnit->canAttack())
-						{
-							if (gDLL->getFAStarIFace()->IsPathDest(finder, pToPlot->getX_INLINE(), pToPlot->getY_INLINE()))
-							{
-								if (pToPlot->isVisibleEnemyDefender(pLoopUnit))
-								{
-									iCost += (PATH_DEFENSE_WEIGHT * std::max(0, (200 - ((pLoopUnit->noDefensiveBonus()) ? 0 : pFromPlot->defenseModifier(pLoopUnit->getTeam(), false)))));
-
-									if (!(pFromPlot->isCity()))
-									{
-										iCost += PATH_CITY_WEIGHT;
-									}
-
-									if (pFromPlot->isRiverCrossing(directionXY(pFromPlot, pToPlot)))
-									{
-										if (!(pLoopUnit->isRiver()))
-										{
-											iCost += (PATH_RIVER_WEIGHT * -(GC.getRIVER_ATTACK_MODIFIER()));
-											iCost += (PATH_MOVEMENT_WEIGHT * iMovesLeft);
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-
-				if (iCost < iWorstCost)
-				{
-					iWorstCost = iCost;
-					iWorstMovesLeft = iMovesLeft;
-					iWorstMax = iMax;
-				}
-			}
+			PathUnitInfo kUnit;
+			fillPathUnitInfo(kUnit, pLoopUnit);
+			pathCostUnit(kUnit, parent, pFromPlot, pToPlot, finder, bAIControlled, false, iWorstCost, iWorstMovesLeft, iWorstMax);
 		}
 	}
 
@@ -1839,8 +1906,18 @@ int pathValid(FAStarNode* parent, FAStarNode* node, int data, const void* pointe
 
 	pSelectionGroup = ((CvSelectionGroup *)pointer);
 
+	// Performance: these properties of the group that started the search do not change during the search, so
+	// they are calculated once per search (each of them looks up the group's head unit)
+	const bool bPathCache = (pointer == s_pPathGroup);
+	if (bPathCache)
+	{
+		updatePathGroupFlags(pSelectionGroup);
+	}
+	const DomainTypes eGroupDomain = bPathCache ? s_ePathGroupDomain : pSelectionGroup->getDomainType();
+	const TeamTypes eHeadTeam = bPathCache ? s_ePathGroupHeadTeam : pSelectionGroup->getHeadTeam();
+
 	// XXX might want to take this out...
-	if (pSelectionGroup->getDomainType() == DOMAIN_SEA)
+	if (eGroupDomain == DOMAIN_SEA)
 	{
 		if (pFromPlot->isWater() && pToPlot->isWater())
 		{
@@ -1851,7 +1928,7 @@ int pathValid(FAStarNode* parent, FAStarNode* node, int data, const void* pointe
 		}
 	}
 
-	if (pSelectionGroup->atPlot(pFromPlot))
+	if (bPathCache ? (s_pPathGroupPlot == pFromPlot) : pSelectionGroup->atPlot(pFromPlot))
 	{
 		return TRUE;
 	}
@@ -1861,14 +1938,14 @@ int pathValid(FAStarNode* parent, FAStarNode* node, int data, const void* pointe
 
 	if (iInfo & MOVE_SAFE_TERRITORY)
 	{
-		if (!(pFromPlot->isRevealed(pSelectionGroup->getHeadTeam(), false)))
+		if (!(pFromPlot->isRevealed(eHeadTeam, false)))
 		{
 			return FALSE;
 		}
 
 		if (pFromPlot->isOwned())
 		{
-			if (pFromPlot->getTeam() != pSelectionGroup->getHeadTeam())
+			if (pFromPlot->getTeam() != eHeadTeam)
 			{
 				return FALSE;
 			}
@@ -1879,14 +1956,14 @@ int pathValid(FAStarNode* parent, FAStarNode* node, int data, const void* pointe
 	{
 		if (pFromPlot->isOwned())
 		{
-			if (atWar(pFromPlot->getTeam(), pSelectionGroup->getHeadTeam()))
+			if (atWar(pFromPlot->getTeam(), eHeadTeam))
 			{
 				return FALSE;
 			}
 		}
 	}
 
-	bAIControl = pSelectionGroup->AI_isControlled();
+	bAIControl = bPathCache ? s_bPathGroupAIControlled : pSelectionGroup->AI_isControlled();
 
 	if (bAIControl)
 	{
@@ -1895,9 +1972,9 @@ int pathValid(FAStarNode* parent, FAStarNode* node, int data, const void* pointe
 		{
 			if (!(iInfo & MOVE_IGNORE_DANGER))
 			{
-				if ((pSelectionGroup == s_pPathGroup) ? (updatePathGroupFlags(pSelectionGroup), !s_bPathGroupCanFight && !s_bPathGroupAlwaysInvisible) : (!(pSelectionGroup->canFight()) && !(pSelectionGroup->alwaysInvisible())))
+				if (bPathCache ? (!s_bPathGroupCanFight && !s_bPathGroupAlwaysInvisible) : (!(pSelectionGroup->canFight()) && !(pSelectionGroup->alwaysInvisible())))
 				{
-					if (getPathPlotDanger(pSelectionGroup->getHeadOwner(), pFromPlot) > 0)
+					if (getPathPlotDanger(bPathCache ? s_ePathGroupHeadOwner : pSelectionGroup->getHeadOwner(), pFromPlot) > 0)
 					{
 						return FALSE;
 					}
@@ -1906,7 +1983,7 @@ int pathValid(FAStarNode* parent, FAStarNode* node, int data, const void* pointe
 		}
 	}
 
-	if (bAIControl || pFromPlot->isRevealed(pSelectionGroup->getHeadTeam(), false))
+	if (bAIControl || pFromPlot->isRevealed(eHeadTeam, false))
 	{
 		PROFILE_PATH_SECTION("pathValid: can move check");
 		if (iInfo & MOVE_THROUGH_ENEMY)

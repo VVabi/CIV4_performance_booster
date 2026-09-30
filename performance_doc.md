@@ -132,11 +132,11 @@ ends. The game never reads these symbols. Not used in network multiplayer. Symbo
 - Path searches are listed by calling function (`path <- <caller>`, `VabiProfCallerSample` in
   `CvSelectionGroup::generatePath`) and the run summary lists all `x <- caller` samples.
 - **Path finder callbacks**: `pathCost`, `pathValid` and `pathAdd` have scopes while
-  `VABI_PROFILE_PATH_CALLBACKS` is 1 (top of the path finder section in `CvGameCoreUtils.cpp`, Timing build
-  only). They run inside the exe's `GeneratePath`, so without them their time is part of the self time of
-  `CvSelectionGroup::generatePath()`. They are called for every expanded node, so they distort the rest of the
-  profile: use them to split `generatePath`'s time, then set the define to 0 for undistorted timings.
-  `pathHeuristic` is never marked.
+  `VABI_PROFILE_PATH_CALLBACKS` is 1 (source constant at the top of the path finder section in
+  `CvGameCoreUtils.cpp`, default **0**, Timing build only; edit and rebuild to switch). They run inside the exe's
+  `GeneratePath`, so without them their time is part of the self time of `CvSelectionGroup::generatePath()`.
+  They are called for every expanded node (tens of millions of times per turn on a large map), so they distort
+  the rest of the profile: set it to 1 only to split `generatePath`'s time. `pathHeuristic` is never marked.
 - Scopes were removed from tiny functions called millions of times (`AI_plotValid`, `canBuild`, `canTrain`,
   `getBestRoute`, `isCoastalLand`, `calculateImprovementYieldChange`, `pathAdd`, two explore loops): their
   overhead distorted the Timing build.
@@ -153,7 +153,7 @@ The function collected `CvUnit*` pointers of all units on the plot and then move
 plot dies with its cargo; a unit bumped onto a fogged plot with enemy units captures or bumps them, which can
 chain back to this plot), which left dangling pointers and could crash, e.g. when declaring a second war. It
 now keeps `IDInfo` and looks each unit up again (`::getUnit`) before use. The result is the same whenever
-vanilla did not crash.
+vanilla did not crash (verified: 500 auto-play turns identical to the reference).
 
 ## Workflow for a new optimization
 1. Argue exactness (same choices, same random draws, same order of lazy caches such as the strategy hash).

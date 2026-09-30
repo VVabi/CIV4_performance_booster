@@ -41,6 +41,17 @@ compared for equality, so wrap-around is safe). Caches are only used for the gro
   `pathValid` 14.5 s -> 8.4 s.
 - **Step movement cost** in `pathCost` (single-unit groups) and the **defense modifier** of a plot for the
   group's team. `generatePath` ~24 s -> 17.2 s together with the `pathValid` caches; DLL 84.4 s -> 78.6 s.
+- **Equivalent units in multi-unit groups** in `pathCost` (`s_aiPathUnitClass`): pathCost evaluates every unit
+  of the group and keeps the worst result. Units that pathCost cannot tell apart (same unit type, owner, base
+  moves, move discount, base combat strength, river, enemy route, and double move flags for hills, every
+  terrain and every feature: everything `pathCost`, `CvPlot::movementCost`, `isValidRoute`, `CvUnit::isEnemy`
+  and `isVisibleEnemyDefender` read from a unit, `getPathUnitSignature`) give identical results, so only the
+  first unit of each such class is evaluated. Exact: the worst value only ever gets lower, so a repeated
+  identical unit never passes the update tests. The classes are calculated once per search for the group that
+  started it. On the large map 65% of the unit evaluations were in multi-unit groups (groups of 11+ units
+  average ~40 units). Result (large map, turns 600-626, identical random seeds): 324M of the 511M multi-unit
+  evaluations skipped (63%); 325.8 s -> 293.8 s wall clock (12.53 -> 11.30 s per round). On the 500-turn
+  scenario half of the multi-unit evaluations are skipped, but few groups are large there (no visible gain).
 - **Search flags** in `pathValid`: `GetInfo(finder)` (a call into the exe) is read once per call instead of up
   to four times; the flags do not change during a search. Not measurable on the large map (~0.5%).
 

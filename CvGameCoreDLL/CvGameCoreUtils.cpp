@@ -1256,6 +1256,91 @@ static int s_iPathGroupNumUnits = 0;
 static std::vector<int> s_aiPathMoveStamp;
 static std::vector<char> s_abPathMoveValue;
 
+// Performance: units of a multi-unit group that cannot be told apart by pathCost (see getPathUnitSignature) give
+// the same step cost, moves and final cost, so pathCost only evaluates the first unit of each such class (it can
+// only ever change the worst value when it is first seen: after a unit was processed, the worst value only gets
+// lower, so the same unit again never passes the tests). s_aiPathUnitClass[i] is the index of the first unit with
+// the same signature as unit i, in the order of the group's unit list; calculated once per search.
+static std::vector<int> s_aiPathUnitClass;
+static std::vector<int> s_aiPathUnitSignature;
+
+// Everything pathCost (and CvPlot::movementCost, CvPlot::isValidRoute, CvUnit::isEnemy, CvPlot::isVisibleEnemyDefender
+// and the other functions it calls) reads from a unit: the unit type (unit info: domain, flat/ignore terrain cost,
+// defensive bonus, only defensive, always hostile, move all terrain), the owner (team, human), the moves (base
+// moves include the promotion and team extras), the move discount, the base combat strength, river, enemy route,
+// and the double move flags of hills, every terrain and every feature.
+static int getPathUnitSignatureSize()
+{
+	return 8 + GC.getNumTerrainInfos() + GC.getNumFeatureInfos();
+}
+
+static void getPathUnitSignature(const CvUnit* pUnit, int* piSignature)
+{
+	int iN = 0;
+	piSignature[iN++] = (int)pUnit->getUnitType();
+	piSignature[iN++] = (int)pUnit->getOwnerINLINE();
+	piSignature[iN++] = pUnit->baseMoves();
+	piSignature[iN++] = pUnit->getExtraMoveDiscount();
+	piSignature[iN++] = pUnit->baseCombatStr();
+	piSignature[iN++] = pUnit->isRiver() ? 1 : 0;
+	piSignature[iN++] = pUnit->isEnemyRoute() ? 1 : 0;
+	piSignature[iN++] = pUnit->isHillsDoubleMove() ? 1 : 0;
+	for (int iI = 0; iI < GC.getNumTerrainInfos(); iI++)
+	{
+		piSignature[iN++] = pUnit->isTerrainDoubleMove((TerrainTypes)iI) ? 1 : 0;
+	}
+	for (int iI = 0; iI < GC.getNumFeatureInfos(); iI++)
+	{
+		piSignature[iN++] = pUnit->isFeatureDoubleMove((FeatureTypes)iI) ? 1 : 0;
+	}
+}
+
+static void updatePathUnitClasses(CvSelectionGroup* pSelectionGroup)
+{
+	s_aiPathUnitClass.clear();
+
+	int iNumUnits = pSelectionGroup->getNumUnits();
+	if (iNumUnits <= 1)
+	{
+		return;
+	}
+
+	int iSize = getPathUnitSignatureSize();
+	s_aiPathUnitSignature.resize(iNumUnits * iSize);
+
+	int iIndex = 0;
+	for (CLLNode<IDInfo>* pUnitNode = pSelectionGroup->headUnitNode(); pUnitNode != NULL; pUnitNode = pSelectionGroup->nextUnitNode(pUnitNode))
+	{
+		CvUnit* pLoopUnit = ::getUnit(pUnitNode->m_data);
+		if (pLoopUnit == NULL || iIndex >= iNumUnits)
+		{
+			// unexpected: do not use classes for this search
+			s_aiPathUnitClass.clear();
+			return;
+		}
+
+		int* piSignature = &s_aiPathUnitSignature[iIndex * iSize];
+		getPathUnitSignature(pLoopUnit, piSignature);
+
+		int iClass = iIndex;
+		for (int iPrev = 0; iPrev < iIndex; iPrev++)
+		{
+			if (s_aiPathUnitClass[iPrev] == iPrev && memcmp(&s_aiPathUnitSignature[iPrev * iSize], piSignature, iSize * sizeof(int)) == 0)
+			{
+				iClass = iPrev;
+				break;
+			}
+		}
+		s_aiPathUnitClass.push_back(iClass);
+		iIndex++;
+	}
+
+	if (iIndex != iNumUnits)
+	{
+		s_aiPathUnitClass.clear();
+	}
+}
+
 static void updatePathGroupFlags(CvSelectionGroup* pSelectionGroup)
 {
 	if (s_iPathGroupFlagsId != s_iPathSearchId)
@@ -1264,6 +1349,7 @@ static void updatePathGroupFlags(CvSelectionGroup* pSelectionGroup)
 		s_bPathGroupCanFight = pSelectionGroup->canFight();
 		s_bPathGroupAlwaysInvisible = pSelectionGroup->alwaysInvisible();
 		s_iPathGroupNumUnits = pSelectionGroup->getNumUnits();
+		updatePathUnitClasses(pSelectionGroup);
 	}
 }
 
@@ -1497,6 +1583,8 @@ int pathHeuristic(int iFromX, int iFromY, int iToX, int iToY)
 // other than the one that started the search). Cumulative line in Logs\PathStepCounters.log every 2M calls.
 #define VABI_PATH_COUNTERS 1
 #if defined(VABI_PROFILE) && VABI_PATH_COUNTERS
+static __int64 s_iPathUnitEvalsSkipped = 0;	// unit evaluations skipped because an equivalent unit was already evaluated
+
 static void vabiPathCountCall(CvSelectionGroup* pGroup, bool bCached)
 {
 	static __int64 s_iCalls = 0;
@@ -1553,9 +1641,9 @@ static void vabiPathCountCall(CvSelectionGroup* pGroup, bool bCached)
 	if (s_iCalls % 2000000 == 0)
 	{
 		CvString szLine;
-		szLine.Format("turn %d: calls %I64d, unit evaluations %I64d; group size 1:%I64d 2:%I64d 3:%I64d 4-5:%I64d 6-10:%I64d 11+:%I64d; cache used: single-unit %I64d calls, multi-unit %I64d calls (%I64d unit evaluations, %I64d groups all of one unit type); other group (no cache): %I64d calls (%I64d unit evaluations)",
+		szLine.Format("turn %d: calls %I64d, unit evaluations %I64d; group size 1:%I64d 2:%I64d 3:%I64d 4-5:%I64d 6-10:%I64d 11+:%I64d; cache used: single-unit %I64d calls, multi-unit %I64d calls (%I64d unit evaluations, %I64d groups all of one unit type); other group (no cache): %I64d calls (%I64d unit evaluations); unit evaluations skipped as equivalent: %I64d",
 			GC.getGameINLINE().getGameTurn(), s_iCalls, s_iUnits, s_aiSize[0], s_aiSize[1], s_aiSize[2], s_aiSize[3], s_aiSize[4], s_aiSize[5],
-			s_iSingleCached, s_iMultiCached, s_iMultiCachedUnits, s_iMultiAllSameType, s_iOtherGroup, s_iOtherGroupUnits);
+			s_iSingleCached, s_iMultiCached, s_iMultiCachedUnits, s_iMultiAllSameType, s_iOtherGroup, s_iOtherGroupUnits, s_iPathUnitEvalsSkipped);
 		gDLL->logMsg("PathStepCounters.log", szLine.c_str(), false, false);
 	}
 }
@@ -1599,12 +1687,24 @@ int pathCost(FAStarNode* parent, FAStarNode* node, int data, const void* pointer
 	iWorstMovesLeft = MAX_INT;
 	iWorstMax = MAX_INT;
 
+	// Performance: only the first unit of each class of equivalent units is evaluated (see s_aiPathUnitClass)
+	const bool bUseClasses = (bPathCache && s_iPathGroupNumUnits > 1 && (int)s_aiPathUnitClass.size() == s_iPathGroupNumUnits);
+	int iUnitIndex = -1;
+
 	pUnitNode = pSelectionGroup->headUnitNode();
 
 	while (pUnitNode != NULL)
 	{
 		pLoopUnit = ::getUnit(pUnitNode->m_data);
 		pUnitNode = pSelectionGroup->nextUnitNode(pUnitNode);
+		iUnitIndex++;
+		if (bUseClasses && s_aiPathUnitClass[iUnitIndex] != iUnitIndex)
+		{
+#if defined(VABI_PROFILE) && VABI_PATH_COUNTERS
+			s_iPathUnitEvalsSkipped++;
+#endif
+			continue;
+		}
 		FAssertMsg(pLoopUnit->getDomainType() != DOMAIN_AIR, "pLoopUnit->getDomainType() is not expected to be equal with DOMAIN_AIR");
 
 		if (parent->m_iData1 > 0)

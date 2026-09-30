@@ -41,6 +41,8 @@ compared for equality, so wrap-around is safe). Caches are only used for the gro
   `pathValid` 14.5 s -> 8.4 s.
 - **Step movement cost** in `pathCost` (single-unit groups) and the **defense modifier** of a plot for the
   group's team. `generatePath` ~24 s -> 17.2 s together with the `pathValid` caches; DLL 84.4 s -> 78.6 s.
+- **Search flags** in `pathValid`: `GetInfo(finder)` (a call into the exe) is read once per call instead of up
+  to four times; the flags do not change during a search. Not measurable on the large map (~0.5%).
 
 ### Skipping path searches is NOT done (see `inexact_targets.md`)
 "Skip hopeless targets before the path search" shortcuts are not exact: path searches with `bReuse` depend on
@@ -137,6 +139,16 @@ ends. The game never reads these symbols. Not used in network multiplayer. Symbo
   `GeneratePath`, so without them their time is part of the self time of `CvSelectionGroup::generatePath()`.
   They are called for every expanded node (tens of millions of times per turn on a large map), so they distort
   the rest of the profile: set it to 1 only to split `generatePath`'s time. `pathHeuristic` is never marked.
+  Level 2 also adds sections inside `pathCost` (`step cost`, `defense modifier`, `attack checks`) and
+  `pathValid` (`danger check`, `can move check`; compare shares, the overhead is large: a large-map run takes
+  ~55% longer). Finding on the large map (turn 625): only the step cost is a real cost, the other sections are
+  mostly scope overhead.
+- **Step cost counters** (`VABI_PATH_COUNTERS` = 1, source constant above `pathCost`, Timing build only, plain
+  counters without timers): `Logs\PathStepCounters.log` gets a cumulative line every 2M `pathCost` calls with the
+  group size distribution and how many step cost evaluations bypass the per-search cache. Large map, turns
+  600-626 (378M calls, 789M unit evaluations): 74% of the calls are single-unit groups (cached), 26% are
+  multi-unit groups, but those account for 65% of the unit evaluations (511M); groups of 11+ units average
+  ~40 units (~1/3 of all evaluations); 48% of the multi-unit calls are groups of a single unit type.
 - Scopes were removed from tiny functions called millions of times (`AI_plotValid`, `canBuild`, `canTrain`,
   `getBestRoute`, `isCoastalLand`, `calculateImprovementYieldChange`, `pathAdd`, two explore loops): their
   overhead distorted the Timing build.

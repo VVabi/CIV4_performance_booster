@@ -1342,11 +1342,18 @@ static int getPathDefenseModifier(const CvPlot* pPlot, TeamTypes eTeam)
 // They are called for every expanded node (millions of times per turn), so the scopes distort the rest of the
 // profile (and the total time): use them to split generatePath's time, then set this to 0 for undistorted timings.
 // pathHeuristic is never marked (a one-line function, the scope would cost more than the function).
+// 0 = off, 1 = the callbacks, 2 = also sections inside pathCost and pathValid (even more overhead: compare the
+// shares of the sections, not their absolute times)
 #define VABI_PROFILE_PATH_CALLBACKS 0
-#if VABI_PROFILE_PATH_CALLBACKS
+#if VABI_PROFILE_PATH_CALLBACKS >= 1
 #define PROFILE_PATH_CALLBACK() PROFILE_FUNC()
 #else
 #define PROFILE_PATH_CALLBACK()
+#endif
+#if VABI_PROFILE_PATH_CALLBACKS >= 2
+#define PROFILE_PATH_SECTION(name) PROFILE(name)
+#else
+#define PROFILE_PATH_SECTION(name)
 #endif
 
 int pathDestValid(int iToX, int iToY, const void* pointer, FAStar* finder)
@@ -1485,6 +1492,75 @@ int pathHeuristic(int iFromX, int iFromY, int iToX, int iToY)
 }
 
 
+// Timing build only, plain counters (no timers, so almost no overhead): how many units the groups of the pathCost
+// calls have and how many of the step cost evaluations bypass the per-search cache (multi-unit groups and groups
+// other than the one that started the search). Cumulative line in Logs\PathStepCounters.log every 2M calls.
+#define VABI_PATH_COUNTERS 1
+#if defined(VABI_PROFILE) && VABI_PATH_COUNTERS
+static void vabiPathCountCall(CvSelectionGroup* pGroup, bool bCached)
+{
+	static __int64 s_iCalls = 0;
+	static __int64 s_iUnits = 0;
+	static __int64 s_iSingleCached = 0;
+	static __int64 s_iMultiCached = 0;
+	static __int64 s_iMultiCachedUnits = 0;
+	static __int64 s_iOtherGroup = 0;
+	static __int64 s_iOtherGroupUnits = 0;
+	static __int64 s_aiSize[6] = { 0, 0, 0, 0, 0, 0 };	// groups of 1, 2, 3, 4-5, 6-10, 11+ units
+	static __int64 s_iMultiGroups = 0;
+	static __int64 s_iMultiAllSameType = 0;
+
+	int iNum = pGroup->getNumUnits();
+	s_iCalls++;
+	s_iUnits += iNum;
+	s_aiSize[(iNum <= 3) ? std::max(0, iNum - 1) : ((iNum <= 5) ? 3 : ((iNum <= 10) ? 4 : 5))]++;
+	if (bCached)
+	{
+		if (iNum == 1)
+		{
+			s_iSingleCached++;
+		}
+		else
+		{
+			s_iMultiCached++;
+			s_iMultiCachedUnits += iNum;
+		}
+	}
+	else
+	{
+		s_iOtherGroup++;
+		s_iOtherGroupUnits += iNum;
+	}
+	if (iNum > 1)
+	{
+		s_iMultiGroups++;
+		CvUnit* pHead = pGroup->getHeadUnit();
+		bool bAllSame = (pHead != NULL);
+		for (CLLNode<IDInfo>* pNode = pGroup->headUnitNode(); pNode != NULL && bAllSame; pNode = pGroup->nextUnitNode(pNode))
+		{
+			CvUnit* pUnit = ::getUnit(pNode->m_data);
+			if (pUnit == NULL || pUnit->getUnitType() != pHead->getUnitType())
+			{
+				bAllSame = false;
+			}
+		}
+		if (bAllSame)
+		{
+			s_iMultiAllSameType++;
+		}
+	}
+
+	if (s_iCalls % 2000000 == 0)
+	{
+		CvString szLine;
+		szLine.Format("turn %d: calls %I64d, unit evaluations %I64d; group size 1:%I64d 2:%I64d 3:%I64d 4-5:%I64d 6-10:%I64d 11+:%I64d; cache used: single-unit %I64d calls, multi-unit %I64d calls (%I64d unit evaluations, %I64d groups all of one unit type); other group (no cache): %I64d calls (%I64d unit evaluations)",
+			GC.getGameINLINE().getGameTurn(), s_iCalls, s_iUnits, s_aiSize[0], s_aiSize[1], s_aiSize[2], s_aiSize[3], s_aiSize[4], s_aiSize[5],
+			s_iSingleCached, s_iMultiCached, s_iMultiCachedUnits, s_iMultiAllSameType, s_iOtherGroup, s_iOtherGroupUnits);
+		gDLL->logMsg("PathStepCounters.log", szLine.c_str(), false, false);
+	}
+}
+#endif
+
 int pathCost(FAStarNode* parent, FAStarNode* node, int data, const void* pointer, FAStar* finder)
 {
 	PROFILE_PATH_CALLBACK();
@@ -1515,6 +1591,10 @@ int pathCost(FAStarNode* parent, FAStarNode* node, int data, const void* pointer
 		updatePathGroupFlags(pSelectionGroup);
 	}
 
+#if defined(VABI_PROFILE) && VABI_PATH_COUNTERS
+	vabiPathCountCall(pSelectionGroup, bPathCache);
+#endif
+
 	iWorstCost = MAX_INT;
 	iWorstMovesLeft = MAX_INT;
 	iWorstMax = MAX_INT;
@@ -1536,7 +1616,10 @@ int pathCost(FAStarNode* parent, FAStarNode* node, int data, const void* pointer
 			iMax = pLoopUnit->maxMoves();
 		}
 
-		iCost = (bPathCache && s_iPathGroupNumUnits == 1) ? getPathStepCost(pLoopUnit, pFromPlot, pToPlot) : pToPlot->movementCost(pLoopUnit, pFromPlot);
+		{
+			PROFILE_PATH_SECTION("pathCost: step cost");
+			iCost = (bPathCache && s_iPathGroupNumUnits == 1) ? getPathStepCost(pLoopUnit, pFromPlot, pToPlot) : pToPlot->movementCost(pLoopUnit, pFromPlot);
+		}
 
 		iMovesLeft = std::max(0, (iMax - iCost));
 
@@ -1576,11 +1659,13 @@ int pathCost(FAStarNode* parent, FAStarNode* node, int data, const void* pointer
 				{
 					if (iMovesLeft == 0)
 					{
+						PROFILE_PATH_SECTION("pathCost: defense modifier");
 						iCost += (PATH_DEFENSE_WEIGHT * std::max(0, (200 - ((pLoopUnit->noDefensiveBonus()) ? 0 : (bPathCache ? getPathDefenseModifier(pToPlot, pLoopUnit->getTeam()) : pToPlot->defenseModifier(pLoopUnit->getTeam(), false))))));
 					}
 
 					if (pSelectionGroup->AI_isControlled())
 					{
+						PROFILE_PATH_SECTION("pathCost: attack checks");
 						if (pLoopUnit->canAttack())
 						{
 							if (gDLL->getFAStarIFace()->IsPathDest(finder, pToPlot->getX_INLINE(), pToPlot->getY_INLINE()))
@@ -1671,7 +1756,10 @@ int pathValid(FAStarNode* parent, FAStarNode* node, int data, const void* pointe
 		return TRUE;
 	}
 
-	if (gDLL->getFAStarIFace()->GetInfo(finder) & MOVE_SAFE_TERRITORY)
+	// Performance: the search flags do not change during a search, and every GetInfo() is a call into the exe
+	const int iInfo = gDLL->getFAStarIFace()->GetInfo(finder);
+
+	if (iInfo & MOVE_SAFE_TERRITORY)
 	{
 		if (!(pFromPlot->isRevealed(pSelectionGroup->getHeadTeam(), false)))
 		{
@@ -1687,7 +1775,7 @@ int pathValid(FAStarNode* parent, FAStarNode* node, int data, const void* pointe
 		}
 	}
 
-	if (gDLL->getFAStarIFace()->GetInfo(finder) & MOVE_NO_ENEMY_TERRITORY)
+	if (iInfo & MOVE_NO_ENEMY_TERRITORY)
 	{
 		if (pFromPlot->isOwned())
 		{
@@ -1702,9 +1790,10 @@ int pathValid(FAStarNode* parent, FAStarNode* node, int data, const void* pointe
 
 	if (bAIControl)
 	{
+		PROFILE_PATH_SECTION("pathValid: danger check");
 		if ((parent->m_iData2 > 1) || (parent->m_iData1 == 0))
 		{
-			if (!(gDLL->getFAStarIFace()->GetInfo(finder) & MOVE_IGNORE_DANGER))
+			if (!(iInfo & MOVE_IGNORE_DANGER))
 			{
 				if ((pSelectionGroup == s_pPathGroup) ? (updatePathGroupFlags(pSelectionGroup), !s_bPathGroupCanFight && !s_bPathGroupAlwaysInvisible) : (!(pSelectionGroup->canFight()) && !(pSelectionGroup->alwaysInvisible())))
 				{
@@ -1719,7 +1808,8 @@ int pathValid(FAStarNode* parent, FAStarNode* node, int data, const void* pointe
 
 	if (bAIControl || pFromPlot->isRevealed(pSelectionGroup->getHeadTeam(), false))
 	{
-		if (gDLL->getFAStarIFace()->GetInfo(finder) & MOVE_THROUGH_ENEMY)
+		PROFILE_PATH_SECTION("pathValid: can move check");
+		if (iInfo & MOVE_THROUGH_ENEMY)
 		{
 			if (!getPathCanMove(pSelectionGroup, pFromPlot, true))
 			{

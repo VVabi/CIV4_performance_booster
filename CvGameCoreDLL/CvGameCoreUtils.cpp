@@ -1250,6 +1250,7 @@ static int getPathPlotDanger(PlayerTypes ePlayer, CvPlot* pPlot)
 // works for the group that started the search (pathDestValid), otherwise everything is calculated as before.
 static const void* s_pPathGroup = NULL;
 static int s_iPathGroupFlagsId = -1;
+static IDInfo s_kPathGroupHeadUnit;		// head unit of the group when the values below were calculated
 static bool s_bPathGroupCanFight = false;
 static bool s_bPathGroupAlwaysInvisible = false;
 static int s_iPathGroupNumUnits = 0;
@@ -1374,11 +1375,27 @@ static TeamTypes s_ePathGroupHeadTeam = NO_TEAM;
 static PlayerTypes s_ePathGroupHeadOwner = NO_PLAYER;
 static bool s_bPathGroupAIControlled = false;
 
+static void newPathCacheGeneration();
+
 static void updatePathGroupFlags(CvSelectionGroup* pSelectionGroup)
 {
+	// Performance (safety net): the per-search values are only valid for the group as it was when they were
+	// calculated. If its units changed without a new search being started (a search the exe started without
+	// pathDestValid), all per-search caches are dropped. Two integer comparisons per call, no unit lookup.
+	if (s_iPathGroupFlagsId == s_iPathSearchId)
+	{
+		const CLLNode<IDInfo>* pHeadNode = pSelectionGroup->headUnitNode();
+		if (pSelectionGroup->getNumUnits() != s_iPathGroupNumUnits || pHeadNode == NULL || !(pHeadNode->m_data == s_kPathGroupHeadUnit))
+		{
+			newPathCacheGeneration();
+		}
+	}
+
 	if (s_iPathGroupFlagsId != s_iPathSearchId)
 	{
 		s_iPathGroupFlagsId = s_iPathSearchId;
+		const CLLNode<IDInfo>* pHeadNode = pSelectionGroup->headUnitNode();
+		s_kPathGroupHeadUnit = (pHeadNode != NULL) ? pHeadNode->m_data : IDInfo();
 		s_bPathGroupCanFight = pSelectionGroup->canFight();
 		s_bPathGroupAlwaysInvisible = pSelectionGroup->alwaysInvisible();
 		s_iPathGroupNumUnits = pSelectionGroup->getNumUnits();
@@ -1496,13 +1513,11 @@ static int getPathDefenseModifier(const CvPlot* pPlot, TeamTypes eTeam)
 #define PROFILE_PATH_SECTION(name)
 #endif
 
-int pathDestValid(int iToX, int iToY, const void* pointer, FAStar* finder)
+// new cache generation: every per-search cache entry of an older generation is invalid (stamps are only compared
+// for equality; the counter is reset, with all caches, before the stamps could overflow)
+static void newPathCacheGeneration()
 {
-	PROFILE_FUNC();
-
-	// new path search: new cache generation (wraps safely, stamps are only compared for equality)
 	s_iPathSearchId++;
-	s_pPathGroup = pointer;
 	if (s_iPathSearchId > 20000000)
 	{
 		s_iPathSearchId = 0;
@@ -1516,6 +1531,25 @@ int pathDestValid(int iToX, int iToY, const void* pointer, FAStar* finder)
 		s_aiPathDefenseStamp.clear();
 		s_aiPathDefenseValue.clear();
 	}
+}
+
+// Performance: starts a new path search for the per-search caches. Called by the DLL right before each
+// GeneratePath it starts (CvSelectionGroup::generatePath, the interface path in CvGameInterface), so those
+// searches never depend on the exe's call order inside GeneratePath, and again by pathDestValid for the searches
+// the exe starts by itself (e.g. the path shown under the mouse). Calling it twice for one search is harmless:
+// nothing is cached in between.
+void startPathSearch(const void* pGroup)
+{
+	newPathCacheGeneration();
+	s_pPathGroup = pGroup;
+}
+
+int pathDestValid(int iToX, int iToY, const void* pointer, FAStar* finder)
+{
+	PROFILE_FUNC();
+
+	// new path search: new cache generation (see startPathSearch)
+	startPathSearch(pointer);
 
 	CLLNode<IDInfo>* pUnitNode1;
 	CLLNode<IDInfo>* pUnitNode2;

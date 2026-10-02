@@ -3750,6 +3750,7 @@ bool CvSelectionGroup::generatePath( const CvPlot* pFromPlot, const CvPlot* pToP
 	bool bSuccess;
 
 	gDLL->getFAStarIFace()->SetData(&GC.getPathFinder(), this);
+	startPathSearch(this);	// Performance: fresh per-search caches in pathCost/pathValid/pathAdd
 
 	bSuccess = gDLL->getFAStarIFace()->GeneratePath(&GC.getPathFinder(), pFromPlot->getX_INLINE(), pFromPlot->getY_INLINE(), pToPlot->getX_INLINE(), pToPlot->getY_INLINE(), false, iFlags, bReuse);
 

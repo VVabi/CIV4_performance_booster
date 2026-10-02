@@ -33,8 +33,14 @@ frame per exe frame; only the redrawing in between is skipped. Budget 500 -> 200
 wall clock.
 
 ### Path searches (`CvGameCoreUtils.cpp`)
-`pathDestValid` runs once at the start of every search and starts a new cache generation (stamps are only
-compared for equality, so wrap-around is safe). Caches are only used for the group that started the search.
+Every search starts a new cache generation (`startPathSearch`; stamps are only compared for equality, and the
+counter is reset with all caches before it could overflow). The DLL calls it right before each `GeneratePath` it
+starts (`CvSelectionGroup::generatePath`, the interface path in `CvGameInterface`), so those searches do not depend
+on the exe's call order; `pathDestValid` calls it as well, for searches the exe starts by itself. As a safety net,
+`updatePathGroupFlags` drops the caches if the group's unit count or head unit changed since they were filled.
+Measured on the 500-turn run (1.27M DLL searches): the exe always called `pathDestValid` before any `pathCost`,
+`pathValid` or non-initial `pathAdd` (only the initial add comes before it, in ~19% of searches), and the group
+check never fired. Caches are only used for the group that started the search.
 - **Plot danger** (`AI_getPlotDanger`) cached per search.
 - **Group checks and per-plot move checks** in `pathValid`: `canMoveThrough` / `canMoveOrAttackInto`
   (a loop over all units of the group), and for civilian groups `canFight` / `alwaysInvisible`.

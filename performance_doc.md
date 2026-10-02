@@ -25,10 +25,10 @@ from the commit messages (different runs, so they do not add up exactly).
 
 ## Game-time optimizations (do not change the game)
 
-### Extra frames during AI turns (`CvGame::update`, `updateFrame`)
+### Extra frames during AI turns (`CvGame::update`, `runGameLogicStep`)
 While only the AI moves (single player, no human turn, no diplomacy screen), several frames of game logic
 run per exe frame, up to `AI_FRAME_TIME_BUDGET_MS`. Each extra frame is the complete per-frame logic
-(`updateFrame`, the body of the original `update`), so the game goes through the same steps as with one
+(`runGameLogicStep`, the body of the original `update`), so the game goes through the same steps as with one
 frame per exe frame; only the redrawing in between is skipped. Budget 500 -> 2000 ms: 258.2 s -> 210.2 s
 wall clock.
 

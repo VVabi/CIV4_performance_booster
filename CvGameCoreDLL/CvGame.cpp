@@ -2049,22 +2049,25 @@ int CvGame::getTeamClosenessScore(int** aaiDistances, int* aiStartingLocs)
 }
 
 
-// Performance: while only the AI moves, several frames of game logic run per frame of the exe instead of one
-// (AI_FRAME_TIME_BUDGET_MS in GlobalDefinesAlt.xml, 0 = one per frame as in BtS). Each extra frame is the
-// complete per-frame game logic (updateFrame), so the game goes through exactly the same sequence of steps as
-// with one frame per exe frame; only the redrawing in between is skipped.
+// Performance: while only the AI moves, several game logic steps run per frame of the exe instead of one
+// (AI_FRAME_TIME_BUDGET_MS in GlobalDefinesAlt.xml, 0 = one per frame as in BtS). Each extra step is the
+// complete game logic of one frame (runGameLogicStep, no drawing: the exe draws after update returns), so the
+// game goes through exactly the same sequence of steps as with one step per exe frame; only the redrawing in
+// between is skipped.
 void CvGame::update()
 {
 	PROFILE("CvGame::update");
 
 	if (!gDLL->GetWorldBuilderMode() || isInAdvancedStart())
 	{
-		updateFrame();
+		runGameLogicStep();
 
 		int iBudgetMs = GC.getDefineINT("AI_FRAME_TIME_BUDGET_MS");
 		if (iBudgetMs > 0)
 		{
 			DWORD dwStart = timeGetTime();
+			// 1000 is only a safety cap against spinning through empty steps; the loop normally ends through
+			// canRunExtraFrame() or the time budget (500-turn Pangea run: about 7 logic steps per game turn)
 			for (int iFrame = 0; iFrame < 1000; iFrame++)
 			{
 				if (!canRunExtraFrame() || (int)(timeGetTime() - dwStart) >= iBudgetMs)
@@ -2072,13 +2075,16 @@ void CvGame::update()
 					break;
 				}
 				PROFILE("CvGame::update extra frame");
-				updateFrame();
+				runGameLogicStep();
 			}
 		}
 	}
 }
 
-// extra frames only while nobody could interact: single player, no human turn, no diplomacy screen
+// extra frames only while nobody could interact: single player, no human turn, no diplomacy screen and no
+// diplomacy or popup waiting to be shown (an AI contact via beginDiplomacy must reach the screen before the AI
+// moves on, as with one frame per exe frame). During AI auto-play nothing is ever waiting (measured: 0 of 3282
+// checks in the 500-turn Pangea run), so auto-play keeps its extra frames.
 bool CvGame::canRunExtraFrame() const
 {
 	if (isNetworkMultiPlayer() || isHotSeat() || isPbem())
@@ -2093,7 +2099,7 @@ bool CvGame::canRunExtraFrame() const
 	{
 		return false;
 	}
-	if (gDLL->isDiplomacy())
+	if (gDLL->isDiplomacy() || gDLL->getInterfaceIFace()->isDiploOrPopupWaiting())
 	{
 		return false;
 	}
@@ -2108,7 +2114,7 @@ bool CvGame::canRunExtraFrame() const
 	return true;
 }
 
-void CvGame::updateFrame()
+void CvGame::runGameLogicStep()
 {
 	{
 		{ PROFILE("frame: sendPlayerOptions"); sendPlayerOptions(); }

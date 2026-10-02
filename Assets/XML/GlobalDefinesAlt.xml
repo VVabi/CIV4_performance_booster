@@ -15,7 +15,7 @@
 	</Define>
 	<Define>
 		<DefineName>FIXED_RANDOM_SEED</DefineName>
-		<iDefineIntVal>12345</iDefineIntVal>
+		<iDefineIntVal>0</iDefineIntVal>
 	</Define>
 	<Define>
 		<DefineName>AUTOPLAY_RAND_LOG_TURN</DefineName>

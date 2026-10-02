@@ -17,6 +17,7 @@ import Popup as PyPopup
 import CvCameraControls
 import CvTopCivs
 import sys
+import os
 import CvWorldBuilderScreen
 import CvAdvisorUtils
 import CvTechChooser
@@ -28,6 +29,16 @@ localText = CyTranslator()
 # AUTOPLAY_TURNS is the value pre-filled there (the last one entered during this session)
 AUTOPLAY_TURNS = 50
 EventAutoPlayTurns = 5100	# popup event id (BtS uses 4999-5012, see CvUtil)
+
+# CIV4_performance_booster: unattended run. If the file autorun.txt (mod folder, contents = number of turns) exists,
+# the game starts that many turns of AI auto-play as soon as a game is loaded and quits when they are done.
+# Delete or rename the file to play normally. 0 = not started yet, 1 = checked, 2 = auto-play running
+# (the game runs with "Beyond the Sword" as working directory and reports __file__ relative to it, so the mod folder
+# is addressed from there)
+AUTORUN_DIR = os.path.join("Mods", "CIV4_performance_booster")
+AUTORUN_FILE = os.path.join(AUTORUN_DIR, "autorun.txt")
+AUTORUN_LOG = os.path.join(AUTORUN_DIR, "autorun.log")
+g_iAutoRunState = 0
 PyPlayer = PyHelpers.PyPlayer
 PyInfo = PyHelpers.PyInfo
 
@@ -946,7 +957,50 @@ class CvEventManager:
 		'sample generic event, called on each game turn slice'
 		genericArgs = argsList[0][0]	# tuple of tuple of my args
 		turnSlice = genericArgs[0]
-	
+
+		# CIV4_performance_booster: unattended run, see AUTORUN_FILE
+		global g_iAutoRunState
+		if (g_iAutoRunState == 0):
+			g_iAutoRunState = 1
+			iTurns = self.__readAutoRunTurns()
+			if (iTurns > 0):
+				gc.getGame().setAIAutoPlay(iTurns)
+				g_iAutoRunState = 2
+		elif (g_iAutoRunState == 2 and gc.getGame().getAIAutoPlay() == 0):
+			# auto-play is done (the DLL has written its logs); leave the game
+			self.__logAutoRun("autorun: auto-play finished, exiting")
+			os._exit(0)
+
+	def __logAutoRun(self, szText):
+		CvUtil.pyPrint(szText)
+		try:
+			f = open(AUTORUN_LOG, "a")
+			try:
+				f.write(szText + "\n")
+			finally:
+				f.close()
+		except IOError:
+			pass
+
+	def __readAutoRunTurns(self):
+		self.__logAutoRun("autorun: looking for %s (cwd %s)" %(os.path.abspath(AUTORUN_FILE), os.getcwd()))
+		try:
+			f = open(AUTORUN_FILE, "r")
+			try:
+				szTurns = f.read().strip()
+			finally:
+				f.close()
+		except IOError, e:
+			self.__logAutoRun("autorun: cannot open file (%s)" %(str(e)))
+			return 0
+		try:
+			iTurns = int(szTurns)
+		except ValueError:
+			self.__logAutoRun("autorun: file content '%s' is not a number" %(szTurns))
+			return 0
+		self.__logAutoRun("autorun: starting %d turns of auto-play" %(iTurns))
+		return iTurns
+
 	def onMouseEvent(self, argsList):
 		'mouse handler - returns 1 if the event was consumed'
 		eventType,mx,my,px,py,interfaceConsumed,screens = argsList

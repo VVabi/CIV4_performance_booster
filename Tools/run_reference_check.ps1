@@ -79,6 +79,8 @@ function Test-Pair($save, $reference) {
 		if (Test-Path $autorunLog) { Get-Content $autorunLog }
 		return 2
 	}
+	# the run worked: its autorun.log is not needed any more (it is kept above when the run failed)
+	if (Test-Path $autorunLog) { Remove-Item $autorunLog }
 
 	$newLines = @(Get-TurnLines $newLog)
 	foreach ($pair in @(@("reference", $reference), @("new      ", $newLog))) {

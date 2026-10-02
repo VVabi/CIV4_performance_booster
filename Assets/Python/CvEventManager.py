@@ -983,7 +983,10 @@ class CvEventManager:
 			pass
 
 	def __readAutoRunTurns(self):
-		self.__logAutoRun("autorun: looking for %s (cwd %s)" %(os.path.abspath(AUTORUN_FILE), os.getcwd()))
+		# normal play (no autorun.txt): do nothing, write no log
+		if (not os.path.isfile(AUTORUN_FILE)):
+			return 0
+		self.__logAutoRun("autorun: found %s (cwd %s)" %(os.path.abspath(AUTORUN_FILE), os.getcwd()))
 		try:
 			f = open(AUTORUN_FILE, "r")
 			try:

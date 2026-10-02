@@ -185,24 +185,24 @@ def getConsoleMacro(argsList):
 	if (fxnKey==6): return "CvCameraControls.g_CameraControls.doZoomCamera(0.5, 0.15)"
 	if (fxnKey==7): return "CvCameraControls.g_CameraControls.doPitchCamera(0.5, 0.5)"
 	return ""
-def vabiPythonObjectCount():
-	'number of objects tracked by the Python garbage collector, for Logs\VabiMemory.log (called from the DLL)'
+def perfPythonObjectCount():
+	'number of objects tracked by the Python garbage collector, for Logs\PerfMemory.log (called from the DLL)'
 	import gc
 	return len(gc.get_objects())
 
 # Performance: which CvGameUtils callbacks always return the same constant (checked once per session by the DLL,
-# see VabiPythonCallbacks.cpp). A callback qualifies only if the CvGameInterface function is exactly
+# see PerfPythonCallbacks.cpp). A callback qualifies only if the CvGameInterface function is exactly
 # "return gameUtils().<name>(argsList)" and the CvGameUtils method only unpacks its arguments and returns a
 # constant (no calls, no global or attribute access except True/False/None). Anything else is always called.
 # Return value for the DLL: 0 = must be called, 2*v+1 = always returns the integer (or bool) v.
-def _vabiOpcodes():
+def _perfOpcodes():
 	try:
 		import opcode
 		return opcode.HAVE_ARGUMENT, opcode.opmap
 	except:
 		return 90, {'POP_TOP': 1, 'BINARY_SUBSCR': 25, 'RETURN_VALUE': 83, 'UNPACK_SEQUENCE': 92, 'LOAD_CONST': 100, 'LOAD_ATTR': 105, 'LOAD_GLOBAL': 116, 'LOAD_FAST': 124, 'STORE_FAST': 125, 'CALL_FUNCTION': 131}
 
-def _vabiReachableOps(code, iHaveArgument):
+def _perfReachableOps(code, iHaveArgument):
 	'opcodes up to and including the first RETURN_VALUE (without jumps, the rest is unreachable)'
 	co = code.co_code
 	ops = []
@@ -220,17 +220,17 @@ def _vabiReachableOps(code, iHaveArgument):
 			break
 	return ops
 
-def vabiConstantCallback(argsList):
+def perfConstantCallback(argsList):
 	try:
 		szName = argsList[0]
 		import CvGameInterface
-		iHaveArgument, m = _vabiOpcodes()
+		iHaveArgument, m = _perfOpcodes()
 		# the interface function must only forward to gameUtils()
 		fWrapper = getattr(CvGameInterface, szName, None)
 		if fWrapper is None or not hasattr(fWrapper, 'func_code'):
 			return 0
 		wc = fWrapper.func_code
-		ops = _vabiReachableOps(wc, iHaveArgument)
+		ops = _perfReachableOps(wc, iHaveArgument)
 		if wc.co_argcount != 1 or len(ops) != 6:
 			return 0
 		expected = [m['LOAD_GLOBAL'], m['CALL_FUNCTION'], m['LOAD_ATTR'], m['LOAD_FAST'], m['CALL_FUNCTION'], m['RETURN_VALUE']]
@@ -245,7 +245,7 @@ def vabiConstantCallback(argsList):
 		code = method.im_func.func_code
 		if code.co_argcount != 2 or (code.co_flags & 0x2C) or code.co_freevars or code.co_cellvars:
 			return 0
-		ops = _vabiReachableOps(code, iHaveArgument)
+		ops = _perfReachableOps(code, iHaveArgument)
 		if len(ops) < 2 or ops[-1][0] != m['RETURN_VALUE']:
 			return 0
 		tail = ops[:-1]

@@ -684,7 +684,7 @@ void CvCityAI::AI_chooseProduction()
 		CyCity* pyCity = new CyCity(this);
 		CyArgsList argsList;
 		argsList.add(gDLL->getPythonIFace()->makePythonObject(pyCity));	// pass in city class
-		if (!vabiConstantPythonCallback("AI_chooseProduction", &lResult)) gDLL->getPythonIFace()->callFunction(PYGameModule, "AI_chooseProduction", argsList.makeFunctionArgs(), &lResult);
+		if (!perfConstantPythonCallback("AI_chooseProduction", &lResult)) gDLL->getPythonIFace()->callFunction(PYGameModule, "AI_chooseProduction", argsList.makeFunctionArgs(), &lResult);
 		delete pyCity;	// python fxn must not hold on to this pointer
 	}
 	if (lResult == 1)

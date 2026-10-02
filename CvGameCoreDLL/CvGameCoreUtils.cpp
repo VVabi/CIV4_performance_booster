@@ -1219,7 +1219,7 @@ int changeIrrigated(FAStarNode* parent, FAStarNode* node, int data, const void* 
 }
 
 
-// Performance (from VabiGEM): AI_getPlotDanger results cached for the duration of one path search.
+// Performance: AI_getPlotDanger results cached for the duration of one path search.
 // The path finder asks for the danger of the same plot many times (once per neighbouring node), and nothing
 // in the game changes while a search runs, so the cached value is always exact. pathDestValid is called once
 // at the start of every search and starts a new cache generation.
@@ -1484,13 +1484,13 @@ static int getPathDefenseModifier(const CvPlot* pPlot, TeamTypes eTeam)
 // pathHeuristic is never marked (a one-line function, the scope would cost more than the function).
 // 0 = off, 1 = the callbacks, 2 = also sections inside pathCost and pathValid (even more overhead: compare the
 // shares of the sections, not their absolute times)
-#define VABI_PROFILE_PATH_CALLBACKS 0
-#if VABI_PROFILE_PATH_CALLBACKS >= 1
+#define PERF_PROFILE_PATH_CALLBACKS 0
+#if PERF_PROFILE_PATH_CALLBACKS >= 1
 #define PROFILE_PATH_CALLBACK() PROFILE_FUNC()
 #else
 #define PROFILE_PATH_CALLBACK()
 #endif
-#if VABI_PROFILE_PATH_CALLBACKS >= 2
+#if PERF_PROFILE_PATH_CALLBACKS >= 2
 #define PROFILE_PATH_SECTION(name) PROFILE(name)
 #else
 #define PROFILE_PATH_SECTION(name)
@@ -1635,11 +1635,11 @@ int pathHeuristic(int iFromX, int iFromY, int iToX, int iToY)
 // Timing build only, plain counters (no timers, so almost no overhead): how many units the groups of the pathCost
 // calls have and how many of the step cost evaluations bypass the per-search cache (multi-unit groups and groups
 // other than the one that started the search). Cumulative line in Logs\PathStepCounters.log every 2M calls.
-#define VABI_PATH_COUNTERS 0
-#if defined(VABI_PROFILE) && VABI_PATH_COUNTERS
+#define PERF_PATH_COUNTERS 0
+#if defined(PERF_PROFILE) && PERF_PATH_COUNTERS
 static __int64 s_iPathUnitEvalsSkipped = 0;	// unit evaluations skipped because an equivalent unit was already evaluated
 
-static void vabiPathCountCall(CvSelectionGroup* pGroup, bool bCached)
+static void perfPathCountCall(CvSelectionGroup* pGroup, bool bCached)
 {
 	static __int64 s_iCalls = 0;
 	static __int64 s_iUnits = 0;
@@ -1837,8 +1837,8 @@ int pathCost(FAStarNode* parent, FAStarNode* node, int data, const void* pointer
 	{
 		updatePathGroupFlags(pSelectionGroup);
 
-#if defined(VABI_PROFILE) && VABI_PATH_COUNTERS
-		vabiPathCountCall(pSelectionGroup, true);
+#if defined(PERF_PROFILE) && PERF_PATH_COUNTERS
+		perfPathCountCall(pSelectionGroup, true);
 		s_iPathUnitEvalsSkipped += s_iPathGroupNumUnits - (int)s_aPathUnits.size();
 #endif
 
@@ -1852,8 +1852,8 @@ int pathCost(FAStarNode* parent, FAStarNode* node, int data, const void* pointer
 	}
 	else
 	{
-#if defined(VABI_PROFILE) && VABI_PATH_COUNTERS
-		vabiPathCountCall(pSelectionGroup, false);
+#if defined(PERF_PROFILE) && PERF_PATH_COUNTERS
+		perfPathCountCall(pSelectionGroup, false);
 #endif
 
 		const bool bAIControlled = pSelectionGroup->AI_isControlled();

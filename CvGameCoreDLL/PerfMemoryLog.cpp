@@ -1,6 +1,6 @@
-// Memory log (ported from VabiGEM): writes one line to Logs\VabiMemory.log whenever the active player's turn starts
+// Memory log: writes one line to Logs\PerfMemory.log whenever the active player's turn starts
 // (also during AI auto-play, when the AI plays the active player's civilization)
-// (switch: VABI_MEMORY_LOG in GlobalDefinesAlt.xml; the game only writes logs with LoggingEnabled = 1 in
+// (switch: PERF_MEMORY_LOG in GlobalDefinesAlt.xml; the game only writes logs with LoggingEnabled = 1 in
 // CivilizationIV.ini). Civ4 is a 32 bit program: with the large address aware flag it gets 4 GB of address
 // space on 64 bit Windows, and allocations fail once no large enough free block is left, so the log shows
 // both the address space in use and the largest free block. The read/write columns are the file I/O of the
@@ -11,7 +11,7 @@
 namespace
 {
 	// own copies of the Windows structures, so this does not depend on the SDK / _WIN32_WINNT version
-	struct VabiMemoryStatusEx
+	struct PerfMemoryStatusEx
 	{
 		DWORD dwLength;
 		DWORD dwMemoryLoad;
@@ -24,7 +24,7 @@ namespace
 		DWORDLONG ullAvailExtendedVirtual;
 	};
 
-	struct VabiProcessMemoryCounters
+	struct PerfProcessMemoryCounters
 	{
 		DWORD cb;
 		DWORD PageFaultCount;
@@ -38,7 +38,7 @@ namespace
 		SIZE_T PeakPagefileUsage;
 	};
 
-	struct VabiIoCounters
+	struct PerfIoCounters
 	{
 		ULONGLONG ReadOperationCount;
 		ULONGLONG WriteOperationCount;
@@ -48,18 +48,19 @@ namespace
 		ULONGLONG OtherTransferCount;
 	};
 
-	typedef BOOL (WINAPI *GlobalMemoryStatusExFn)(VabiMemoryStatusEx*);
-	typedef BOOL (WINAPI *GetProcessMemoryInfoFn)(HANDLE, VabiProcessMemoryCounters*, DWORD);
-	typedef BOOL (WINAPI *GetProcessIoCountersFn)(HANDLE, VabiIoCounters*);
+	typedef BOOL (WINAPI *GlobalMemoryStatusExFn)(PerfMemoryStatusEx*);
+	typedef BOOL (WINAPI *GetProcessMemoryInfoFn)(HANDLE, PerfProcessMemoryCounters*, DWORD);
+	typedef BOOL (WINAPI *GetProcessIoCountersFn)(HANDLE, PerfIoCounters*);
 
 	bool s_bInit = false;
 	GlobalMemoryStatusExFn s_pGlobalMemoryStatusEx = NULL;
 	GetProcessMemoryInfoFn s_pGetProcessMemoryInfo = NULL;
 	GetProcessIoCountersFn s_pGetProcessIoCounters = NULL;
 
-	bool s_bHaveLast = false;
+	bool s_bHaveLastFaults = false;
+	bool s_bHaveLastIo = false;
 	DWORD s_iLastPageFaults = 0;
-	VabiIoCounters s_kLastIo;
+	PerfIoCounters s_kLastIo;
 
 	void init()
 	{
@@ -82,7 +83,7 @@ namespace
 		}
 	}
 
-	struct VabiAddressSpace
+	struct PerfAddressSpace
 	{
 		SIZE_T iLargestFree;		// largest free (unreserved) block
 		SIZE_T iCommittedPrivate;	// heaps and other allocations of the DLL, Python, the engine and drivers
@@ -91,10 +92,10 @@ namespace
 	};
 
 	// walks the process address space once, in bytes
-	VabiAddressSpace scanAddressSpace(SIZE_T iAddressLimit)
+	PerfAddressSpace scanAddressSpace(SIZE_T iAddressLimit)
 	{
 		MEMORY_BASIC_INFORMATION kInfo;
-		VabiAddressSpace kSpace = { 0, 0, 0, 0 };
+		PerfAddressSpace kSpace = { 0, 0, 0, 0 };
 		SIZE_T iAddress = 0;
 		while (iAddress < iAddressLimit && VirtualQuery((LPCVOID)iAddress, &kInfo, sizeof(kInfo)) == sizeof(kInfo))
 		{
@@ -150,17 +151,17 @@ namespace
 	}
 }
 
-void VabiMemoryLogTurnStart()
+void PerfMemoryLogTurnStart()
 {
-	if (GC.getDefineINT("VABI_MEMORY_LOG") == 0)
+	if (GC.getDefineINT("PERF_MEMORY_LOG") == 0)
 	{
 		return;
 	}
 	if (!s_bInit)
 	{
 		init();
-		gDLL->logMsg("VabiMemory.log", "turn  year |  addr used / total MB  largest free MB | private MB  work set MB  peak ws MB | committed MB: private  mapped  image | crt heap MB (blocks) | page faults | read MB (ops)  written MB (ops) | units cities groups plotgrps  msgs  replay events | py objects", false, true);
-		gDLL->logMsg("VabiMemory.log", "(page faults and read/written are since the previous line; committed private = DLL, Python, engine and driver allocations; crt heap = malloc/new of the DLL, exe and Python; py objects = objects tracked by the Python garbage collector)", false, true);
+		gDLL->logMsg("PerfMemory.log", "turn  year |  addr used / total MB  largest free MB | private MB  work set MB  peak ws MB | committed MB: private  mapped  image | crt heap MB (blocks) | page faults | read MB (ops)  written MB (ops) | units cities groups plotgrps  msgs  replay events | py objects", false, true);
+		gDLL->logMsg("PerfMemory.log", "(page faults and read/written are since the previous line; committed private = DLL, Python, engine and driver allocations; crt heap = malloc/new of the DLL, exe and Python; py objects = objects tracked by the Python garbage collector)", false, true);
 	}
 
 	int iUsedMB = -1;
@@ -168,7 +169,7 @@ void VabiMemoryLogTurnStart()
 	SIZE_T iLimit = 0x7FFF0000;
 	if (s_pGlobalMemoryStatusEx != NULL)
 	{
-		VabiMemoryStatusEx kStatus;
+		PerfMemoryStatusEx kStatus;
 		kStatus.dwLength = sizeof(kStatus);
 		if (s_pGlobalMemoryStatusEx(&kStatus))
 		{
@@ -177,7 +178,7 @@ void VabiMemoryLogTurnStart()
 			iLimit = (SIZE_T)kStatus.ullTotalVirtual;
 		}
 	}
-	VabiAddressSpace kSpace = scanAddressSpace(iLimit);
+	PerfAddressSpace kSpace = scanAddressSpace(iLimit);
 
 	DWORDLONG iCrtHeapUsed = 0;
 	int iCrtHeapBlocks = 0;
@@ -189,25 +190,26 @@ void VabiMemoryLogTurnStart()
 	int iPageFaults = -1;
 	if (s_pGetProcessMemoryInfo != NULL)
 	{
-		VabiProcessMemoryCounters kMem;
+		PerfProcessMemoryCounters kMem;
 		kMem.cb = sizeof(kMem);
 		if (s_pGetProcessMemoryInfo(GetCurrentProcess(), &kMem, sizeof(kMem)))
 		{
 			iPrivateMB = toMB(kMem.PagefileUsage);
 			iWorkingSetMB = toMB(kMem.WorkingSetSize);
 			iPeakWorkingSetMB = toMB(kMem.PeakWorkingSetSize);
-			iPageFaults = s_bHaveLast ? (int)(kMem.PageFaultCount - s_iLastPageFaults) : 0;
+			iPageFaults = s_bHaveLastFaults ? (int)(kMem.PageFaultCount - s_iLastPageFaults) : 0;
 			s_iLastPageFaults = kMem.PageFaultCount;
+			s_bHaveLastFaults = true;
 		}
 	}
 
 	int iReadMB = -1, iReadOps = -1, iWriteMB = -1, iWriteOps = -1;
 	if (s_pGetProcessIoCounters != NULL)
 	{
-		VabiIoCounters kIo;
+		PerfIoCounters kIo;
 		if (s_pGetProcessIoCounters(GetCurrentProcess(), &kIo))
 		{
-			if (s_bHaveLast)
+			if (s_bHaveLastIo)
 			{
 				iReadMB = toMB(kIo.ReadTransferCount - s_kLastIo.ReadTransferCount);
 				iReadOps = (int)(kIo.ReadOperationCount - s_kLastIo.ReadOperationCount);
@@ -219,9 +221,9 @@ void VabiMemoryLogTurnStart()
 				iReadMB = iReadOps = iWriteMB = iWriteOps = 0;
 			}
 			s_kLastIo = kIo;
+			s_bHaveLastIo = true;
 		}
 	}
-	s_bHaveLast = true;
 
 	// game objects: if memory grows while these stay flat, the growth is not game data
 	int iUnits = 0, iCities = 0, iGroups = 0, iPlotGroups = 0, iMessages = 0, iEvents = 0;
@@ -246,7 +248,7 @@ void VabiMemoryLogTurnStart()
 	int iReplayMessages = (int)GC.getGameINLINE().getNumReplayMessages();
 
 	long lPythonObjects = -1;
-	gDLL->getPythonIFace()->callFunction(PYCivModule, "vabiPythonObjectCount", NULL, &lPythonObjects);
+	gDLL->getPythonIFace()->callFunction(PYCivModule, "perfPythonObjectCount", NULL, &lPythonObjects);
 
 	char szBuf[640];
 	sprintf(szBuf, "%4d %5d | %9d / %5d MB  %15d | %10d  %11d  %10d | %20d  %6d  %5d | %6d (%8d) | %11d | %7d (%5d)  %10d (%5d) | %5d %6d %6d %8d %5d %7d %6d | %10ld",
@@ -258,5 +260,5 @@ void VabiMemoryLogTurnStart()
 		iPageFaults, iReadMB, iReadOps, iWriteMB, iWriteOps,
 		iUnits, iCities, iGroups, iPlotGroups, iMessages, iReplayMessages, iEvents,
 		lPythonObjects);
-	gDLL->logMsg("VabiMemory.log", szBuf, false, true);
+	gDLL->logMsg("PerfMemory.log", szBuf, false, true);
 }

@@ -21,7 +21,7 @@ from the commit messages (different runs, so they do not add up exactly).
 | `AUTOPLAY_SKIP_AUTOSAVE` | 1 | No autosaves while AI auto-play runs. |
 | `FIXED_RANDOM_SEED` | 12345 | Testing aid: every new game/scenario uses the same random numbers (0 = off). **Set to 0 for normal play.** |
 | `AUTOPLAY_RAND_LOG_TURN` | 0 | Turn whose random draws are logged to `AutoPlayRand.log` (0 = off). |
-| `VABI_MEMORY_LOG` | 0 | 1 = per-turn `Logs\VabiMemory.log`. |
+| `PERF_MEMORY_LOG` | 0 | 1 = per-turn `Logs\PerfMemory.log`. |
 
 ## Game-time optimizations (do not change the game)
 
@@ -35,7 +35,7 @@ wall clock.
 ### Path searches (`CvGameCoreUtils.cpp`)
 `pathDestValid` runs once at the start of every search and starts a new cache generation (stamps are only
 compared for equality, so wrap-around is safe). Caches are only used for the group that started the search.
-- **Plot danger** (`AI_getPlotDanger`) cached per search (ported from VabiGEM).
+- **Plot danger** (`AI_getPlotDanger`) cached per search.
 - **Group checks and per-plot move checks** in `pathValid`: `canMoveThrough` / `canMoveOrAttackInto`
   (a loop over all units of the group), and for civilian groups `canFight` / `alwaysInvisible`.
   `pathValid` 14.5 s -> 8.4 s.
@@ -105,7 +105,7 @@ DLL time on the large map (9.6M calls per 26 rounds). Same result, less work per
 are read once; the border danger (only added for AI players and non-city plots) is only evaluated at distance 1
 or 2; plots without units that cannot be border plots are skipped before the area lookup; the distance is
 `max(|dx|, |dy|)` when the range is less than half the map in both directions (then the wrapping in
-`stepDistance` cannot shorten it), else `stepDistance`. A cache across searches (like VabiGEM's) was looked at
+`stepDistance` cannot shorten it), else `stepDistance`. A cache across searches was looked at
 and dropped: `canMoveInto` reads too much state (fortify state of defenders, mission AI of the group, force
 peace, permanent war/peace, area border obstacles, the Python callback, ...) to cover with a list of
 invalidating changes.
@@ -117,20 +117,20 @@ invalidating changes.
   the XML (`initTechWorldClasses`) instead of looping over all unit and building types. 5.0 s -> 3.8 s.
 - `CvPlayer::getBestRoute`: only visits build types that build a route (same order) and skips the read-only
   `canBuild` check for routes that cannot beat the best one. `AI_updateRouteToCity` 4.0 s -> 2.9 s.
-- `CvUnit::updatePlunder` (ported from VabiGEM): only rebuilds the plot groups of teams whose trade network
+- `CvUnit::updatePlunder`: only rebuilds the plot groups of teams whose trade network
   changed. Trade routes are still recalculated for every player in the same order as
   `CvGame::updatePlotGroups()` did.
 
-### Python callbacks (`VabiPythonCallbacks.cpp`, `CvAppInterface.py`)
+### Python callbacks (`PerfPythonCallbacks.cpp`, `CvAppInterface.py`)
 The DLL calls many `CvGameUtils` callbacks for every unit update, city turn etc.; in unmodified BtS most
-only return False. `vabiConstantCallback` (Python) inspects the bytecode once per session and callback: the
+only return False. `perfConstantCallback` (Python) inspects the bytecode once per session and callback: the
 `CvGameInterface` function must be exactly `return gameUtils().<name>(argsList)` and the `CvGameUtils`
 method may only unpack its arguments and return a constant (no calls, no attribute access, except
-True/False/None). The DLL then uses the constant (`vabiConstantPythonCallback`). Callbacks replaced by a mod
+True/False/None). The DLL then uses the constant (`perfConstantPythonCallback`). Callbacks replaced by a mod
 are called as before. Used for 16 callbacks (`AI_unitUpdate`, `AI_doWar`, `AI_doDiplo`, `AI_chooseTech`,
 `doGrowth`, `doCulture`, `doPlotCulture`, `doProduction`, `doReligion`, `doGreatPeople`, `doMeltdown`,
 `doCombat`, `getUpgradePriceOverride`, ...). The outcome per callback is written to
-`Logs\VabiPythonCallbacks.log`. Together with `AUTOPLAY_SKIP_AUTOSAVE`: wall clock 210.2 s -> 194.8 s, DLL
+`Logs\PerfPythonCallbacks.log`. Together with `AUTOPLAY_SKIP_AUTOSAVE`: wall clock 210.2 s -> 194.8 s, DLL
 154.3 s -> 141.4 s.
 
 ## Graphics-only optimization
@@ -157,18 +157,18 @@ ends. The game never reads these symbols. Not used in network multiplayer. Symbo
 - **`AUTOPLAY_SKIP_AUTOSAVE`**: no autosaves during auto-play; the turn that ends the run is still saved.
 
 ## Profiling (Timing build)
-- Build: `CvGameCoreDLL\build_timing.bat` (= `build.bat Timing`, defines `VABI_PROFILE`, DLL is copied to
+- Build: `CvGameCoreDLL\build_timing.bat` (= `build.bat Timing`, defines `PERF_PROFILE`, DLL is copied to
   `Assets`). Run `build.bat` afterwards for the normal Release DLL.
-- `PROFILE` / `PROFILE_FUNC` scopes (`FProfiler.h`, `VabiProfiler.cpp`) use `QueryPerformanceCounter`.
-  `Logs\VabiProfile.log` has one report per turn of the active player's civilization: per inter-turn in
+- `PROFILE` / `PROFILE_FUNC` scopes (`FProfiler.h`, `PerfProfiler.cpp`) use `QueryPerformanceCounter`.
+  `Logs\PerfProfile.log` has one report per turn of the active player's civilization: per inter-turn in
   normal play, per full round during auto-play, plus a run summary at the end of an auto-play run.
 - Extra scopes: Python callbacks `AI_chooseProduction` and `AI_unitUpdate`, event handlers (calls and time
   per `event: <name>`), steps of the game update frame, `CvGame::doTurn` (including the exe's AutoSave),
   `CvPlayer::doTurn`, `CvCityAI::AI_doTurn`, `AI_yieldValue` and parts of `AI_plotValue`.
-- Path searches are listed by calling function (`path <- <caller>`, `VabiProfCallerSample` in
+- Path searches are listed by calling function (`path <- <caller>`, `PerfProfCallerSample` in
   `CvSelectionGroup::generatePath`) and the run summary lists all `x <- caller` samples.
 - **Path finder callbacks**: `pathCost`, `pathValid` and `pathAdd` have scopes while
-  `VABI_PROFILE_PATH_CALLBACKS` is 1 (source constant at the top of the path finder section in
+  `PERF_PROFILE_PATH_CALLBACKS` is 1 (source constant at the top of the path finder section in
   `CvGameCoreUtils.cpp`, default **0**, Timing build only; edit and rebuild to switch). They run inside the exe's
   `GeneratePath`, so without them their time is part of the self time of `CvSelectionGroup::generatePath()`.
   They are called for every expanded node (tens of millions of times per turn on a large map), so they distort
@@ -177,7 +177,7 @@ ends. The game never reads these symbols. Not used in network multiplayer. Symbo
   `pathValid` (`danger check`, `can move check`; compare shares, the overhead is large: a large-map run takes
   ~55% longer). Finding on the large map (turn 625): only the step cost is a real cost, the other sections are
   mostly scope overhead.
-- **Step cost counters** (`VABI_PATH_COUNTERS` = 1, source constant above `pathCost`, Timing build only, plain
+- **Step cost counters** (`PERF_PATH_COUNTERS` = 1, source constant above `pathCost`, Timing build only, plain
   counters without timers): `Logs\PathStepCounters.log` gets a cumulative line every 2M `pathCost` calls with the
   group size distribution and how many step cost evaluations bypass the per-search cache. Large map, turns
   600-626 (378M calls, 789M unit evaluations): 74% of the calls are single-unit groups (cached), 26% are
@@ -186,12 +186,12 @@ ends. The game never reads these symbols. Not used in network multiplayer. Symbo
 - Scopes were removed from tiny functions called millions of times (`AI_plotValid`, `canBuild`, `canTrain`,
   `getBestRoute`, `isCoastalLand`, `calculateImprovementYieldChange`, `pathAdd`, two explore loops): their
   overhead distorted the Timing build.
-- **Memory log** (`VabiMemoryLog.cpp`, ported from VabiGEM, `VABI_MEMORY_LOG` = 1): per turn address space,
+- **Memory log** (`PerfMemoryLog.cpp`, `PERF_MEMORY_LOG` = 1): per turn address space,
   private/working set, committed memory by type, C runtime heap (slow with many blocks), page faults,
-  file I/O, game object counts and Python object count (`vabiPythonObjectCount` in `CvAppInterface.py`).
+  file I/O, game object counts and Python object count (`perfPythonObjectCount` in `CvAppInterface.py`).
   Off it only reads the define once per turn.
 
-## Bug fixes (ported from VabiGEM)
+## Bug fixes
 
 ### Crash when units are bumped after a war declaration (`CvPlot::verifyUnitValidPlot`)
 The function collected `CvUnit*` pointers of all units on the plot and then moved them away with
@@ -204,6 +204,6 @@ vanilla did not crash (verified: 500 auto-play turns identical to the reference)
 ## Workflow for a new optimization
 1. Argue exactness (same choices, same random draws, same order of lazy caches such as the strategy hash).
 2. Build Timing (`build.bat Timing`), copy the DLL to `Assets`.
-3. Run the fixed-seed auto-play, diff `AutoPlay.log` against the reference, compare `VabiProfile.log`.
+3. Run the fixed-seed auto-play, diff `AutoPlay.log` against the reference, compare `PerfProfile.log`.
 4. Commit only if identical; then replace the reference with the new run. `TestDLLs\` (git-ignored)
    keeps the DLL of each step for A/B runs.

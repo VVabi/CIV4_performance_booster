@@ -140,7 +140,7 @@ Target_LIBDEF=$(TEMP_TARGET_FILES)\CvGameCoreDLL.def
 Target_PCH=$(TEMP_TARGET_FILES)\CvGameCoreDLL.pch
 
 Target_PDB=$(TEMP_TARGET_FILES)\CvGameCoreDLL.pdb
-# VabiGEM: linker map (function addresses) for reading crash dumps; archived per build as maps\CvGameCoreDLL_<timestamp>.map
+# linker map (function addresses) for reading crash dumps; archived per build as maps\CvGameCoreDLL_<timestamp>.map
 Target_MAP=$(TEMP_TARGET_FILES)\CvGameCoreDLL.map
 
 Target_OTHER=$(TEMP_TARGET_FILES)\CvGameCoreDLL.exp
@@ -211,7 +211,7 @@ CFLAGS  = $(Release_CFLAGS) /DFASSERT_ENABLE
 LDFLAGS = $(Release_LDFLAGS)
 !ENDIF
 !IF "$(TARGET)" == "Timing"
-CFLAGS  = $(Release_CFLAGS) /DVABI_PROFILE
+CFLAGS  = $(Release_CFLAGS) /DPERF_PROFILE
 LDFLAGS = $(Release_LDFLAGS)
 !ENDIF
 !IF "$(TARGET)" == "Profile"

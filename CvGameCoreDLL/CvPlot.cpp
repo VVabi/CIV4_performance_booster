@@ -833,7 +833,7 @@ void CvPlot::verifyUnitValidPlot()
 {
 	PROFILE_FUNC();
 	
-	// Bug fix (from VabiGEM): keep unit IDs, not pointers. Moving a unit can delete other units of this plot
+	// Bug fix: keep unit IDs, not pointers. Moving a unit can delete other units of this plot
 	// (a transport without a valid plot dies with its cargo; a unit bumped onto a fogged plot with enemy units
 	// captures or bumps them, which can chain back to this plot), so every unit is looked up again before use.
 	// The dangling pointers could crash, e.g. when declaring a second war.

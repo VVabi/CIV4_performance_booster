@@ -3972,8 +3972,8 @@ void CvGame::setAIAutoPlay(int iNewValue)
 			s_iAutoPlayStartTurn = getGameTurn();
 			s_iAutoPlayPlannedTurns = getAIAutoPlay();
 			s_dwAutoPlayStartTime = timeGetTime();
-#ifdef VABI_PROFILE
-			VabiProfOnAutoPlayStart();
+#ifdef PERF_PROFILE
+			PerfProfOnAutoPlayStart();
 #endif
 		}
 		else if ((iOldValue > 0) && (getAIAutoPlay() == 0) && (s_iAutoPlayStartTurn >= 0))
@@ -3989,8 +3989,8 @@ void CvGame::setAIAutoPlay(int iNewValue)
 				s_iAutoPlayStartTurn, iEndTurn, iRounds, s_iAutoPlayPlannedTurns, bStoppedEarly ? " (stopped early)" : "",
 				fSeconds, fSeconds / std::max(1, iRounds));
 			gDLL->logMsg("AutoPlay.log", szLine.c_str(), false, true);
-#ifdef VABI_PROFILE
-			VabiProfOnAutoPlayEnd(s_iAutoPlayStartTurn, iEndTurn, bStoppedEarly);
+#ifdef PERF_PROFILE
+			PerfProfOnAutoPlayEnd(s_iAutoPlayStartTurn, iEndTurn, bStoppedEarly);
 #endif
 			s_iAutoPlayStartTurn = -1;
 		}

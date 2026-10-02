@@ -6025,7 +6025,8 @@ RouteTypes CvPlayer::getBestRoute(CvPlot* pPlot) const
 	eBestRoute = NO_ROUTE;
 
 	// Performance: only the build types that build a route (XML data, same order as looping over all build
-	// types), and the (read-only) checks are skipped for routes that could not beat the best one anyway
+	// types), and the checks are skipped for routes that could not beat the best one anyway (unless the python
+	// canBuild callback is enabled: it is observable, so it is called for every route build as before)
 	static std::vector<int> s_aiRouteBuilds;
 	static int s_iRouteBuildsFor = -1;
 	if (s_iRouteBuildsFor != GC.getNumBuildInfos())
@@ -6046,7 +6047,7 @@ RouteTypes CvPlayer::getBestRoute(CvPlot* pPlot) const
 		iI = s_aiRouteBuilds[iRouteBuild];
 		eRoute = ((RouteTypes)(GC.getBuildInfo((BuildTypes)iI).getRoute()));
 
-		if (eRoute != NO_ROUTE && GC.getRouteInfo(eRoute).getValue() > iBestValue)
+		if (eRoute != NO_ROUTE && (GC.getUSE_CAN_BUILD_CALLBACK() || GC.getRouteInfo(eRoute).getValue() > iBestValue))
 		{
 			if ((pPlot != NULL) ? ((pPlot->getRouteType() == eRoute) || canBuild(pPlot, ((BuildTypes)iI))) : GET_TEAM(getTeam()).isHasTech((TechTypes)(GC.getBuildInfo((BuildTypes)iI).getTechPrereq())))
 			{
@@ -9679,7 +9680,7 @@ void CvPlayer::setTurnActiveForPbem(bool bActive)
 }
 
 
-void VabiMemoryLogTurnStart();	// VabiMemoryLog.cpp
+void PerfMemoryLogTurnStart();	// PerfMemoryLog.cpp
 
 void CvPlayer::setTurnActive(bool bNewValue, bool bDoTurn)
 {
@@ -9695,25 +9696,25 @@ void CvPlayer::setTurnActive(bool bNewValue, bool bDoTurn)
 			CvPlot::flushMapSymbols();
 		}
 
-#ifdef VABI_PROFILE
+#ifdef PERF_PROFILE
 		// timing profiler: one report per turn of the active player's civilization (also during AI auto-play)
 		if (getID() == GC.getGameINLINE().getActivePlayer())
 		{
 			if (bNewValue)
 			{
-				VabiProfOnActiveTurnStart();
+				PerfProfOnActiveTurnStart();
 			}
 			else
 			{
-				VabiProfOnActiveTurnEnd(isHuman());
+				PerfProfOnActiveTurnEnd(isHuman());
 			}
 		}
 #endif
 
-		// one line of memory statistics per turn of the active player's civilization (LogsVabiMemory.log, VABI_MEMORY_LOG)
+		// one line of memory statistics per turn of the active player's civilization (LogsPerfMemory.log, PERF_MEMORY_LOG)
 		if (bNewValue && getID() == GC.getGameINLINE().getActivePlayer())
 		{
-			VabiMemoryLogTurnStart();
+			PerfMemoryLogTurnStart();
 		}
 
 		if (isTurnActive())
@@ -12644,7 +12645,7 @@ void CvPlayer::doGold()
 	CyArgsList argsList;
 	argsList.add(getID());
 	long lResult=0;
-	if (!vabiConstantPythonCallback("doGold", &lResult)) gDLL->getPythonIFace()->callFunction(PYGameModule, "doGold", argsList.makeFunctionArgs(), &lResult);
+	if (!perfConstantPythonCallback("doGold", &lResult)) gDLL->getPythonIFace()->callFunction(PYGameModule, "doGold", argsList.makeFunctionArgs(), &lResult);
 	if (lResult == 1)
 	{
 		return;
@@ -12703,7 +12704,7 @@ void CvPlayer::doResearch()
 	CyArgsList argsList;
 	argsList.add(getID());
 	long lResult=0;
-	if (!vabiConstantPythonCallback("doResearch", &lResult)) gDLL->getPythonIFace()->callFunction(PYGameModule, "doResearch", argsList.makeFunctionArgs(), &lResult);
+	if (!perfConstantPythonCallback("doResearch", &lResult)) gDLL->getPythonIFace()->callFunction(PYGameModule, "doResearch", argsList.makeFunctionArgs(), &lResult);
 	if (lResult == 1)
 	{
 		return;

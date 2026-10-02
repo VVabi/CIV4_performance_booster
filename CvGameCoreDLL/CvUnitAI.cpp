@@ -85,7 +85,7 @@ bool CvUnitAI::AI_update()
 		CyUnit* pyUnit = new CyUnit(this);
 		CyArgsList argsList;
 		argsList.add(gDLL->getPythonIFace()->makePythonObject(pyUnit));	// pass in unit class
-		if (!vabiConstantPythonCallback("AI_unitUpdate", &lResult)) gDLL->getPythonIFace()->callFunction(PYGameModule, "AI_unitUpdate", argsList.makeFunctionArgs(), &lResult);
+		if (!perfConstantPythonCallback("AI_unitUpdate", &lResult)) gDLL->getPythonIFace()->callFunction(PYGameModule, "AI_unitUpdate", argsList.makeFunctionArgs(), &lResult);
 		delete pyUnit;	// python fxn must not hold on to this pointer
 	}
 	if (lResult == 1)
@@ -545,7 +545,7 @@ void CvUnitAI::AI_upgrade()
 	FAssertMsg(!isHuman(), "isHuman did not return false as expected");
 	FAssertMsg(AI_getUnitAIType() != NO_UNITAI, "AI_getUnitAIType() is not expected to be equal with NO_UNITAI");
 
-	// Performance (from VabiGEM): cheap exits before valuing every unit type. canUpgrade() fails for every
+	// Performance: cheap exits before valuing every unit type. canUpgrade() fails for every
 	// type in these cases anyway, and the random number below is only drawn when canUpgrade() succeeds.
 	// Only taken when the owner's AI strategies are already computed for this turn: AI_unitValue() asks for
 	// them, and they are computed on the first request of each turn, so skipping that first request would

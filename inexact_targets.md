@@ -93,6 +93,3 @@ is a different game, so it cannot be verified with the "identical `AutoPlay.log`
   (`bReuse = false` everywhere: exact by construction for the reordering, but every search becomes more
   expensive). The reuse check shows how rarely the results differ.
 - Expected gain of the pillage skip alone: ~2 s per round (~13%) on the large map late game.
-- VabiGEM has the same kind of change in `AI_blockade` (bound-and-sort search instead of pathing to every
-  candidate plot, `CvUnitAI.cpp`). It is not exercised while `VABI_DISABLE_BLOCKADES` is 1 (the default), and it
-  has not been checked for this problem.

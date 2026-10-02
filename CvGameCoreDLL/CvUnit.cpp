@@ -4651,7 +4651,7 @@ void CvUnit::updatePlunder(int iChange, bool bUpdatePlotGroups)
 
 	bool bOldTradeNet;
 	bool bChanged = false;
-	// Performance (from VabiGEM): remember which teams' trade networks changed, so that only their plot
+	// Performance: remember which teams' trade networks changed, so that only their plot
 	// groups are rebuilt instead of those of every player.
 	bool abTeamChanged[MAX_TEAMS];
 
@@ -6678,7 +6678,7 @@ int CvUnit::upgradePrice(UnitTypes eUnit) const
 	argsList.add(getID());
 	argsList.add((int) eUnit);
 	long lResult=0;
-	if (!vabiConstantPythonCallback("getUpgradePriceOverride", &lResult)) gDLL->getPythonIFace()->callFunction(PYGameModule, "getUpgradePriceOverride", argsList.makeFunctionArgs(), &lResult);
+	if (!perfConstantPythonCallback("getUpgradePriceOverride", &lResult)) gDLL->getPythonIFace()->callFunction(PYGameModule, "getUpgradePriceOverride", argsList.makeFunctionArgs(), &lResult);
 	if (lResult >= 0)
 	{
 		return lResult;

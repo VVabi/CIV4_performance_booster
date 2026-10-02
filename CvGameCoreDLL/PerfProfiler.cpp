@@ -1,5 +1,5 @@
-// Timing profiler (ported from VabiGEM) - only active in the "Timing" build (build.bat Timing, defines VABI_PROFILE).
-// Measures every PROFILE / PROFILE_FUNC scope with QueryPerformanceCounter and writes Logs\VabiProfile.log
+// Timing profiler - only active in the "Timing" build (build.bat Timing, defines PERF_PROFILE).
+// Measures every PROFILE / PROFILE_FUNC scope with QueryPerformanceCounter and writes Logs\PerfProfile.log
 // whenever the active player's turn starts:
 // - normal play: the counters are reset when the human ends his turn, so each report covers exactly one
 //   inter-turn (all AI turns plus the game's doTurn), without the human's own thinking time;
@@ -9,19 +9,19 @@
 #include "CvGameCoreDLL.h"
 #include "FProfiler.h"
 
-#ifdef VABI_PROFILE
+#ifdef PERF_PROFILE
 
 #include <algorithm>
 #include <map>
 #include <string>
 
-static VabiProfSample* s_pFirstSample = NULL;
-VabiProfScope* VabiProfScope::s_pCurrent = NULL;
+static PerfProfSample* s_pFirstSample = NULL;
+PerfProfScope* PerfProfScope::s_pCurrent = NULL;
 static __int64 s_iIntervalStart = 0;
 static bool s_bRunActive = false;
 static __int64 s_iRunStart = 0;
 
-VabiProfSample::VabiProfSample(const char* szName) :
+PerfProfSample::PerfProfSample(const char* szName) :
 	m_szName(szName), m_iTotal(0), m_iSelf(0), m_iCalls(0), m_iDepth(0),
 	m_iRunTotal(0), m_iRunSelf(0), m_iRunCalls(0)
 {
@@ -29,10 +29,10 @@ VabiProfSample::VabiProfSample(const char* szName) :
 	s_pFirstSample = this;
 }
 
-static bool sortByTotal(const VabiProfSample* a, const VabiProfSample* b) { return a->m_iTotal > b->m_iTotal; }
-static bool sortBySelf(const VabiProfSample* a, const VabiProfSample* b) { return a->m_iSelf > b->m_iSelf; }
-static bool sortByRunTotal(const VabiProfSample* a, const VabiProfSample* b) { return a->m_iRunTotal > b->m_iRunTotal; }
-static bool sortByRunSelf(const VabiProfSample* a, const VabiProfSample* b) { return a->m_iRunSelf > b->m_iRunSelf; }
+static bool sortByTotal(const PerfProfSample* a, const PerfProfSample* b) { return a->m_iTotal > b->m_iTotal; }
+static bool sortBySelf(const PerfProfSample* a, const PerfProfSample* b) { return a->m_iSelf > b->m_iSelf; }
+static bool sortByRunTotal(const PerfProfSample* a, const PerfProfSample* b) { return a->m_iRunTotal > b->m_iRunTotal; }
+static bool sortByRunSelf(const PerfProfSample* a, const PerfProfSample* b) { return a->m_iRunSelf > b->m_iRunSelf; }
 
 static double msPerTick()
 {
@@ -43,7 +43,7 @@ static double msPerTick()
 
 static void startInterval()
 {
-	for (VabiProfSample* p = s_pFirstSample; p != NULL; p = p->m_pNext)
+	for (PerfProfSample* p = s_pFirstSample; p != NULL; p = p->m_pNext)
 	{
 		p->m_iTotal = 0;
 		p->m_iSelf = 0;
@@ -59,7 +59,7 @@ static void addIntervalToRun()
 	{
 		return;
 	}
-	for (VabiProfSample* p = s_pFirstSample; p != NULL; p = p->m_pNext)
+	for (PerfProfSample* p = s_pFirstSample; p != NULL; p = p->m_pNext)
 	{
 		p->m_iRunTotal += p->m_iTotal;
 		p->m_iRunSelf += p->m_iSelf;
@@ -67,15 +67,15 @@ static void addIntervalToRun()
 	}
 }
 
-static void writeTable(std::vector<VabiProfSample*>& aSamples, double fMsPerTick, int iMaxLines, bool bRun)
+static void writeTable(std::vector<PerfProfSample*>& aSamples, double fMsPerTick, int iMaxLines, bool bRun)
 {
 	char szBuf[512];
 	sprintf(szBuf, "%-64s %12s %12s %12s %10s", "Function", "total ms", "self ms", "calls", "us/call");
-	gDLL->logMsg("VabiProfile.log", szBuf, false, false);
+	gDLL->logMsg("PerfProfile.log", szBuf, false, false);
 	int iLines = 0;
 	for (int i = 0; i < (int)aSamples.size() && iLines < iMaxLines; i++)
 	{
-		VabiProfSample* p = aSamples[i];
+		PerfProfSample* p = aSamples[i];
 		__int64 iTotal = bRun ? p->m_iRunTotal : p->m_iTotal;
 		__int64 iSelf = bRun ? p->m_iRunSelf : p->m_iSelf;
 		unsigned int iCalls = bRun ? p->m_iRunCalls : p->m_iCalls;
@@ -85,18 +85,18 @@ static void writeTable(std::vector<VabiProfSample*>& aSamples, double fMsPerTick
 		}
 		sprintf(szBuf, "%-64.64s %12.1f %12.1f %12u %10.2f", p->m_szName,
 			iTotal * fMsPerTick, iSelf * fMsPerTick, iCalls, iTotal * fMsPerTick * 1000.0 / iCalls);
-		gDLL->logMsg("VabiProfile.log", szBuf, false, false);
+		gDLL->logMsg("PerfProfile.log", szBuf, false, false);
 		iLines++;
 	}
 }
 
 // one sample per (prefix, caller) pair, e.g. to see which AI functions request the path searches
-VabiProfSample* VabiProfCallerSample(const char* szPrefix)
+PerfProfSample* PerfProfCallerSample(const char* szPrefix)
 {
-	static std::map<std::pair<const char*, VabiProfSample*>, VabiProfSample*> s_mapSamples;
-	VabiProfSample* pCaller = (VabiProfScope::s_pCurrent != NULL) ? VabiProfScope::s_pCurrent->getSample() : NULL;
-	std::pair<const char*, VabiProfSample*> key(szPrefix, pCaller);
-	std::map<std::pair<const char*, VabiProfSample*>, VabiProfSample*>::iterator it = s_mapSamples.find(key);
+	static std::map<std::pair<const char*, PerfProfSample*>, PerfProfSample*> s_mapSamples;
+	PerfProfSample* pCaller = (PerfProfScope::s_pCurrent != NULL) ? PerfProfScope::s_pCurrent->getSample() : NULL;
+	std::pair<const char*, PerfProfSample*> key(szPrefix, pCaller);
+	std::map<std::pair<const char*, PerfProfSample*>, PerfProfSample*>::iterator it = s_mapSamples.find(key);
 	if (it != s_mapSamples.end())
 	{
 		return it->second;
@@ -105,29 +105,29 @@ VabiProfSample* VabiProfCallerSample(const char* szPrefix)
 	char* szName = new char[strlen(szPrefix) + strlen(szCaller) + 1];	// kept for the whole session
 	strcpy(szName, szPrefix);
 	strcat(szName, szCaller);
-	VabiProfSample* pSample = new VabiProfSample(szName);
+	PerfProfSample* pSample = new PerfProfSample(szName);
 	s_mapSamples[key] = pSample;
 	return pSample;
 }
 
 // one sample per name that is only known at runtime, e.g. "event: unitMove"
-VabiProfSample* VabiProfNamedSample(const char* szPrefix, const char* szName)
+PerfProfSample* PerfProfNamedSample(const char* szPrefix, const char* szName)
 {
-	static std::map<std::string, VabiProfSample*> s_mapSamples;
+	static std::map<std::string, PerfProfSample*> s_mapSamples;
 	std::string szKey = std::string(szPrefix) + szName;
-	std::map<std::string, VabiProfSample*>::iterator it = s_mapSamples.find(szKey);
+	std::map<std::string, PerfProfSample*>::iterator it = s_mapSamples.find(szKey);
 	if (it != s_mapSamples.end())
 	{
 		return it->second;
 	}
 	char* szSampleName = new char[szKey.size() + 1];	// kept for the whole session
 	strcpy(szSampleName, szKey.c_str());
-	VabiProfSample* pSample = new VabiProfSample(szSampleName);
+	PerfProfSample* pSample = new PerfProfSample(szSampleName);
 	s_mapSamples[szKey] = pSample;
 	return pSample;
 }
 
-void VabiProfOnActiveTurnEnd(bool bHuman)
+void PerfProfOnActiveTurnEnd(bool bHuman)
 {
 	if (bHuman)
 	{
@@ -135,7 +135,7 @@ void VabiProfOnActiveTurnEnd(bool bHuman)
 	}
 }
 
-void VabiProfOnActiveTurnStart()
+void PerfProfOnActiveTurnStart()
 {
 	if (s_iIntervalStart == 0)
 	{
@@ -146,18 +146,18 @@ void VabiProfOnActiveTurnStart()
 	QueryPerformanceCounter((LARGE_INTEGER*)&iNow);
 	double fMsPerTick = msPerTick();
 
-	std::vector<VabiProfSample*> aSamples;
-	for (VabiProfSample* p = s_pFirstSample; p != NULL; p = p->m_pNext)
+	std::vector<PerfProfSample*> aSamples;
+	for (PerfProfSample* p = s_pFirstSample; p != NULL; p = p->m_pNext)
 	{
 		aSamples.push_back(p);
 	}
 
 	char szBuf[512];
-	gDLL->logMsg("VabiProfile.log", "", false, false);
+	gDLL->logMsg("PerfProfile.log", "", false, false);
 	sprintf(szBuf, "===== %s before game turn %d: %.1f s wall clock =====",
 		(GC.getGameINLINE().getAIAutoPlay() > 0) ? "AI auto-play round" : "Inter-turn",
 		GC.getGameINLINE().getGameTurn(), (iNow - s_iIntervalStart) * fMsPerTick / 1000.0);
-	gDLL->logMsg("VabiProfile.log", szBuf, false, false);
+	gDLL->logMsg("PerfProfile.log", szBuf, false, false);
 
 	__int64 iInstrumented = 0;
 	for (int i = 0; i < (int)aSamples.size(); i++)
@@ -166,13 +166,13 @@ void VabiProfOnActiveTurnStart()
 	}
 	sprintf(szBuf, "Time inside profiled DLL code: %.1f s (the rest is the exe: graphics, animations, interface, ...)",
 		iInstrumented * fMsPerTick / 1000.0);
-	gDLL->logMsg("VabiProfile.log", szBuf, false, false);
+	gDLL->logMsg("PerfProfile.log", szBuf, false, false);
 
-	gDLL->logMsg("VabiProfile.log", "--- Sorted by self time (time spent in the function itself) ---", false, false);
+	gDLL->logMsg("PerfProfile.log", "--- Sorted by self time (time spent in the function itself) ---", false, false);
 	std::sort(aSamples.begin(), aSamples.end(), sortBySelf);
 	writeTable(aSamples, fMsPerTick, 60, false);
 
-	gDLL->logMsg("VabiProfile.log", "--- Sorted by total time (including called functions) ---", false, false);
+	gDLL->logMsg("PerfProfile.log", "--- Sorted by total time (including called functions) ---", false, false);
 	std::sort(aSamples.begin(), aSamples.end(), sortByTotal);
 	writeTable(aSamples, fMsPerTick, 80, false);
 
@@ -180,9 +180,9 @@ void VabiProfOnActiveTurnStart()
 	startInterval();
 }
 
-void VabiProfOnAutoPlayStart()
+void PerfProfOnAutoPlayStart()
 {
-	for (VabiProfSample* p = s_pFirstSample; p != NULL; p = p->m_pNext)
+	for (PerfProfSample* p = s_pFirstSample; p != NULL; p = p->m_pNext)
 	{
 		p->m_iRunTotal = 0;
 		p->m_iRunSelf = 0;
@@ -193,7 +193,7 @@ void VabiProfOnAutoPlayStart()
 	s_iRunStart = s_iIntervalStart;
 }
 
-void VabiProfOnAutoPlayEnd(int iStartTurn, int iEndTurn, bool bStoppedEarly)
+void PerfProfOnAutoPlayEnd(int iStartTurn, int iEndTurn, bool bStoppedEarly)
 {
 	if (!s_bRunActive)
 	{
@@ -208,33 +208,33 @@ void VabiProfOnAutoPlayEnd(int iStartTurn, int iEndTurn, bool bStoppedEarly)
 	double fSeconds = (iNow - s_iRunStart) * fMsPerTick / 1000.0;
 	int iRounds = std::max(1, iEndTurn - iStartTurn);
 
-	std::vector<VabiProfSample*> aSamples;
+	std::vector<PerfProfSample*> aSamples;
 	__int64 iInstrumented = 0;
-	for (VabiProfSample* p = s_pFirstSample; p != NULL; p = p->m_pNext)
+	for (PerfProfSample* p = s_pFirstSample; p != NULL; p = p->m_pNext)
 	{
 		aSamples.push_back(p);
 		iInstrumented += p->m_iRunSelf;
 	}
 
 	char szBuf[512];
-	gDLL->logMsg("VabiProfile.log", "", false, false);
+	gDLL->logMsg("PerfProfile.log", "", false, false);
 	sprintf(szBuf, "##### AI auto-play run summary: game turns %d - %d (%d rounds%s): %.1f s wall clock, %.2f s per round #####",
 		iStartTurn, iEndTurn, iEndTurn - iStartTurn, bStoppedEarly ? ", stopped early" : "", fSeconds, fSeconds / iRounds);
-	gDLL->logMsg("VabiProfile.log", szBuf, false, false);
+	gDLL->logMsg("PerfProfile.log", szBuf, false, false);
 	sprintf(szBuf, "Time inside profiled DLL code: %.1f s (%.2f s per round)",
 		iInstrumented * fMsPerTick / 1000.0, iInstrumented * fMsPerTick / 1000.0 / iRounds);
-	gDLL->logMsg("VabiProfile.log", szBuf, false, false);
+	gDLL->logMsg("PerfProfile.log", szBuf, false, false);
 
-	gDLL->logMsg("VabiProfile.log", "--- Whole run, sorted by self time ---", false, false);
+	gDLL->logMsg("PerfProfile.log", "--- Whole run, sorted by self time ---", false, false);
 	std::sort(aSamples.begin(), aSamples.end(), sortByRunSelf);
 	writeTable(aSamples, fMsPerTick, 60, true);
 
-	gDLL->logMsg("VabiProfile.log", "--- Whole run, sorted by total time ---", false, false);
+	gDLL->logMsg("PerfProfile.log", "--- Whole run, sorted by total time ---", false, false);
 	std::sort(aSamples.begin(), aSamples.end(), sortByRunTotal);
 	writeTable(aSamples, fMsPerTick, 80, true);
 
 	// all step timers ("frame: ...", "doTurn: ...", "player doTurn: ..."), sorted by total time
-	std::vector<VabiProfSample*> aSteps;
+	std::vector<PerfProfSample*> aSteps;
 	for (int i = 0; i < (int)aSamples.size(); i++)
 	{
 		if (strstr(aSamples[i]->m_szName, ": ") != NULL)
@@ -244,11 +244,11 @@ void VabiProfOnAutoPlayEnd(int iStartTurn, int iEndTurn, bool bStoppedEarly)
 	}
 	if (!aSteps.empty())
 	{
-		gDLL->logMsg("VabiProfile.log", "--- Whole run, all step timers (names with \": \") ---", false, false);
+		gDLL->logMsg("PerfProfile.log", "--- Whole run, all step timers (names with \": \") ---", false, false);
 		writeTable(aSteps, fMsPerTick, 1000, true);
 	}
 
-	std::vector<VabiProfSample*> aCallers;
+	std::vector<PerfProfSample*> aCallers;
 	for (int i = 0; i < (int)aSamples.size(); i++)
 	{
 		if (strstr(aSamples[i]->m_szName, " <- ") != NULL)
@@ -258,9 +258,9 @@ void VabiProfOnAutoPlayEnd(int iStartTurn, int iEndTurn, bool bStoppedEarly)
 	}
 	if (!aCallers.empty())
 	{
-		gDLL->logMsg("VabiProfile.log", "--- Whole run, calls by calling function (\"x <- caller\"; total = time spent in x) ---", false, false);
+		gDLL->logMsg("PerfProfile.log", "--- Whole run, calls by calling function (\"x <- caller\"; total = time spent in x) ---", false, false);
 		writeTable(aCallers, fMsPerTick, 1000, true);
 	}
 }
 
-#endif // VABI_PROFILE
+#endif // PERF_PROFILE

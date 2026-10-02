@@ -22,7 +22,7 @@
 		<iDefineIntVal>0</iDefineIntVal>
 	</Define>
 	<Define>
-		<DefineName>VABI_MEMORY_LOG</DefineName>
+		<DefineName>PERF_MEMORY_LOG</DefineName>
 		<iDefineIntVal>0</iDefineIntVal>
 	</Define>
 	<Define>

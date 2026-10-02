@@ -353,7 +353,7 @@ void getMissionTypeString(CvWString& szString, MissionTypes eMissionType);
 void getMissionAIString(CvWString& szString, MissionAITypes eMissionAI);
 void getUnitAIString(CvWString& szString, UnitAITypes eUnitAI);
 
-// Performance: Python callbacks that always return the same constant are not called (VabiPythonCallbacks.cpp)
-bool vabiConstantPythonCallback(const char* szName, long* plResult);
+// Performance: Python callbacks that always return the same constant are not called (PerfPythonCallbacks.cpp)
+bool perfConstantPythonCallback(const char* szName, long* plResult);
 
 #endif

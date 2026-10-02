@@ -2,15 +2,15 @@
 rem ============================================================
 rem  Builds CvGameCoreDLL.dll for CIV4_performance_booster (original BtS 3.19 SDK).
 rem  Usage:  build.bat [Release|Assert|Debug|Profile|Timing] [clean]
-rem  Timing = Release + timing profiler, writes Logs\VabiProfile.log after every round.
+rem  Timing = Release + timing profiler, writes Logs\PerfProfile.log after every round.
 rem  Double-click = Release build. Output goes to <Target>\CvGameCoreDLL.dll
 rem  and the full log to build.log next to this file.
 rem  The new DLL is also copied into ..\Assets (YOURMOD in Makefile.settings).
 rem ============================================================
 setlocal
 cd /d "%~dp0"
-if defined VABI_BUILD_INNER goto run
-set VABI_BUILD_INNER=1
+if defined PERF_BUILD_INNER goto run
+set PERF_BUILD_INNER=1
 call "%~f0" %* > build.log 2>&1
 set RESULT=%ERRORLEVEL%
 type build.log

@@ -136,8 +136,10 @@ The DLL calls many `CvGameUtils` callbacks for every unit update, city turn etc.
 only return False. `perfConstantCallback` (Python) inspects the bytecode once per game and callback (the
 answers are cleared in `CvGame::reset`, i.e. on every new game and load): the
 `CvGameInterface` function must be exactly `return gameUtils().<name>(argsList)` and the `CvGameUtils`
-method may only unpack its arguments and return a constant (no calls, no attribute access, except
-True/False/None). The DLL then uses the constant (`perfConstantPythonCallback`) and does not build the Python
+method may only read its arguments directly from `argsList` (`x = argsList[k]` with `0 <= k <` the number of
+values the DLL passes, or unpacking exactly that many) and then return a constant (no calls, no attribute
+access, no other subscripts, except True/False/None). The DLL passes the number of values with each callback
+name, so a method whose argument reads would fail is called as before. The DLL then uses the constant (`perfConstantPythonCallback`) and does not build the Python
 arguments either. Callbacks replaced by a mod are called as before. The DLL asks for 16 callbacks; in
 unmodified BtS 15 of them are skipped: `AI_unitUpdate`, `AI_chooseProduction`, `AI_doWar`, `AI_doDiplo`,
 `doGold`, `doResearch`, `doGrowth`, `doCulture`, `doPlotCulture`, `doProduction`, `doReligion`,

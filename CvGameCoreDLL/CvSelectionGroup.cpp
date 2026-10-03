@@ -3018,7 +3018,7 @@ bool CvSelectionGroup::groupAttack(int iX, int iY, int iFlags, bool& bFailedAlre
 						bAttack = true;
 
 						long lResult=0;
-						if (!perfConstantPythonCallback("doCombat", &lResult))
+						if (!perfConstantPythonCallback("doCombat", 2, &lResult))
 						{
 							CySelectionGroup* pyGroup = new CySelectionGroup(this);
 							CyPlot* pyPlot = new CyPlot(pDestPlot);

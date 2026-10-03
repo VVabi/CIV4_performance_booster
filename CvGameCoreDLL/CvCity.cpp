@@ -11129,7 +11129,7 @@ void CvCity::doGrowth()
 	int iDiff;
 
 	long lResult=0;
-	if (!perfConstantPythonCallback("doGrowth", &lResult))
+	if (!perfConstantPythonCallback("doGrowth", 1, &lResult))
 	{
 		CyCity* pyCity = new CyCity(this);
 		CyArgsList argsList;
@@ -11179,7 +11179,7 @@ void CvCity::doGrowth()
 void CvCity::doCulture()
 {
 	long lResult=0;
-	if (!perfConstantPythonCallback("doCulture", &lResult))
+	if (!perfConstantPythonCallback("doCulture", 1, &lResult))
 	{
 		CyCity* pyCity = new CyCity(this);
 		CyArgsList argsList;
@@ -11204,7 +11204,7 @@ void CvCity::doPlotCulture(bool bUpdate, PlayerTypes ePlayer, int iCultureRate)
 	CultureLevelTypes eCultureLevel = (CultureLevelTypes)0;
 
 	long lResult=0;
-	if (!perfConstantPythonCallback("doPlotCulture", &lResult))
+	if (!perfConstantPythonCallback("doPlotCulture", 4, &lResult))
 	{
 		CyCity* pyCity = new CyCity(this);
 		CyArgsList argsList;
@@ -11409,7 +11409,7 @@ bool CvCity::doCheckProduction()
 void CvCity::doProduction(bool bAllowNoProduction)
 {
 	long lResult=0;
-	if (!perfConstantPythonCallback("doProduction", &lResult))
+	if (!perfConstantPythonCallback("doProduction", 1, &lResult))
 	{
 		CyCity* pyCity = new CyCity(this);
 		CyArgsList argsList;
@@ -11530,7 +11530,7 @@ void CvCity::doReligion()
 	int iI, iJ;
 
 	long lResult=0;
-	if (!perfConstantPythonCallback("doReligion", &lResult))
+	if (!perfConstantPythonCallback("doReligion", 1, &lResult))
 	{
 		CyCity* pyCity = new CyCity(this);
 		CyArgsList argsList;
@@ -11593,7 +11593,7 @@ void CvCity::doReligion()
 void CvCity::doGreatPeople()
 {
 	long lResult=0;
-	if (!perfConstantPythonCallback("doGreatPeople", &lResult))
+	if (!perfConstantPythonCallback("doGreatPeople", 1, &lResult))
 	{
 		CyCity* pyCity = new CyCity(this);
 		CyArgsList argsList;
@@ -11663,7 +11663,7 @@ void CvCity::doMeltdown()
 	int iI;
 
 	long lResult=0;
-	if (!perfConstantPythonCallback("doMeltdown", &lResult))
+	if (!perfConstantPythonCallback("doMeltdown", 1, &lResult))
 	{
 		CyCity* pyCity = new CyCity(this);
 		CyArgsList argsList;

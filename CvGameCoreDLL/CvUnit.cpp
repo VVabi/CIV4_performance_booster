@@ -6678,7 +6678,7 @@ int CvUnit::upgradePrice(UnitTypes eUnit) const
 	argsList.add(getID());
 	argsList.add((int) eUnit);
 	long lResult=0;
-	if (!perfConstantPythonCallback("getUpgradePriceOverride", &lResult)) gDLL->getPythonIFace()->callFunction(PYGameModule, "getUpgradePriceOverride", argsList.makeFunctionArgs(), &lResult);
+	if (!perfConstantPythonCallback("getUpgradePriceOverride", 3, &lResult)) gDLL->getPythonIFace()->callFunction(PYGameModule, "getUpgradePriceOverride", argsList.makeFunctionArgs(), &lResult);
 	if (lResult >= 0)
 	{
 		return lResult;

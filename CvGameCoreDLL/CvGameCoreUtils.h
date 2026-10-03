@@ -355,7 +355,7 @@ void getMissionAIString(CvWString& szString, MissionAITypes eMissionAI);
 void getUnitAIString(CvWString& szString, UnitAITypes eUnitAI);
 
 // Performance: Python callbacks that always return the same constant are not called (PerfPythonCallbacks.cpp)
-bool perfConstantPythonCallback(const char* szName, long* plResult);
+bool perfConstantPythonCallback(const char* szName, int iNumArgs, long* plResult);	// iNumArgs: values the DLL passes to it
 void perfResetPythonCallbacks();
 
 #endif

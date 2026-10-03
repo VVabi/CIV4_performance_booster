@@ -12645,7 +12645,7 @@ void CvPlayer::doGold()
 	CyArgsList argsList;
 	argsList.add(getID());
 	long lResult=0;
-	if (!perfConstantPythonCallback("doGold", &lResult)) gDLL->getPythonIFace()->callFunction(PYGameModule, "doGold", argsList.makeFunctionArgs(), &lResult);
+	if (!perfConstantPythonCallback("doGold", 1, &lResult)) gDLL->getPythonIFace()->callFunction(PYGameModule, "doGold", argsList.makeFunctionArgs(), &lResult);
 	if (lResult == 1)
 	{
 		return;
@@ -12704,7 +12704,7 @@ void CvPlayer::doResearch()
 	CyArgsList argsList;
 	argsList.add(getID());
 	long lResult=0;
-	if (!perfConstantPythonCallback("doResearch", &lResult)) gDLL->getPythonIFace()->callFunction(PYGameModule, "doResearch", argsList.makeFunctionArgs(), &lResult);
+	if (!perfConstantPythonCallback("doResearch", 1, &lResult)) gDLL->getPythonIFace()->callFunction(PYGameModule, "doResearch", argsList.makeFunctionArgs(), &lResult);
 	if (lResult == 1)
 	{
 		return;

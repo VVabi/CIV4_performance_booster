@@ -82,7 +82,7 @@ bool CvUnitAI::AI_update()
 	long lResult=0;
 	{
 		PROFILE("Python: AI_unitUpdate");
-		if (!perfConstantPythonCallback("AI_unitUpdate", &lResult))
+		if (!perfConstantPythonCallback("AI_unitUpdate", 1, &lResult))
 		{
 			CyUnit* pyUnit = new CyUnit(this);
 			CyArgsList argsList;
@@ -591,7 +591,7 @@ void CvUnitAI::AI_upgrade()
 	long lUpgradePriceOverride;
 	bool bCheckUpgradeFirst = kPlayer.AI_isStrategyHashCached() &&
 		!GC.getUSE_CAN_TRAIN_CALLBACK() && !GC.getUSE_CANNOT_TRAIN_CALLBACK() &&
-		perfConstantPythonCallback("getUpgradePriceOverride", &lUpgradePriceOverride);
+		perfConstantPythonCallback("getUpgradePriceOverride", 3, &lUpgradePriceOverride);
 	int iCurrentValue = 0;
 	bool bCurrentValueKnown = false;
 	if (!bCheckUpgradeFirst)

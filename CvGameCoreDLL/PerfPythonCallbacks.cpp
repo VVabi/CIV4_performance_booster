@@ -25,8 +25,9 @@ void perfResetPythonCallbacks()
 }
 
 // returns true if the Python callback szName always returns the same integer; then *plResult is set to it and
-// the caller does not need to call Python (nor build the Python arguments)
-bool perfConstantPythonCallback(const char* szName, long* plResult)
+// the caller does not need to call Python (nor build the Python arguments). iNumArgs is the number of values the
+// caller passes to the callback (the check only accepts argument reads that fit it, see CvAppInterface.py)
+bool perfConstantPythonCallback(const char* szName, int iNumArgs, long* plResult)
 {
 	static int s_iEnabled = -1;
 	if (s_iEnabled < 0)
@@ -49,6 +50,7 @@ bool perfConstantPythonCallback(const char* szName, long* plResult)
 	{
 		CyArgsList argsList;
 		argsList.add(szName);
+		argsList.add(iNumArgs);
 		lCode = 0;
 		if (!gDLL->getPythonIFace()->callFunction(PYCivModule, "perfConstantCallback", argsList.makeFunctionArgs(), &lCode))
 		{

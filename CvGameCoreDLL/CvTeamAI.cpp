@@ -3219,7 +3219,7 @@ void CvTeamAI::AI_doWar()
 	CyArgsList argsList;
 	argsList.add(getID());
 	long lResult=0;
-	if (!perfConstantPythonCallback("AI_doWar", &lResult)) gDLL->getPythonIFace()->callFunction(PYGameModule, "AI_doWar", argsList.makeFunctionArgs(), &lResult);
+	if (!perfConstantPythonCallback("AI_doWar", 1, &lResult)) gDLL->getPythonIFace()->callFunction(PYGameModule, "AI_doWar", argsList.makeFunctionArgs(), &lResult);
 	if (lResult == 1)
 	{
 		return;

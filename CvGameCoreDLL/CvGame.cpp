@@ -420,6 +420,9 @@ void CvGame::reset(HandicapTypes eHandicap, bool bConstructorCall)
 	// Uninit class
 	uninit();
 
+	// Performance: check the Python callbacks again for this game (new game or load)
+	perfResetPythonCallbacks();
+
 	m_iElapsedGameTurns = 0;
 	m_iStartTurn = 0;
 	m_iStartYear = 0;

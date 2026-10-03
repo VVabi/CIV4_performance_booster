@@ -1,7 +1,7 @@
 // Performance: skipping Python callbacks that always return the same constant.
 // The DLL calls many CvGameUtils callbacks (via CvGameInterface) for every unit update, city turn etc. In the
 // unmodified BtS Python most of them only return False. perfConstantCallback in CvAppInterface.py checks the
-// Python bytecode once per session and callback name: if the callback can only ever return one constant (no
+// Python bytecode once per game and callback name: if the callback can only ever return one constant (no
 // calls, no access to the game), the DLL uses that constant instead of calling Python. Callbacks replaced by a
 // mod are recognized as non-constant and called as before. Switch: PYTHON_SKIP_TRIVIAL_CALLBACKS
 // (GlobalDefinesAlt.xml). The result per callback is written to Logs\PerfPythonCallbacks.log.
@@ -10,8 +10,22 @@
 #include <map>
 #include <string>
 
+// encoded answer of perfConstantCallback per callback name: 0 = must be called, 2*v+1 = always returns v.
+// Kept per game: perfResetPythonCallbacks() empties it on every new game and load, so a mod that replaces a
+// callback is seen from the next game on.
+static std::map<std::string, long>& perfCallbackCodes()
+{
+	static std::map<std::string, long> s_mapCode;
+	return s_mapCode;
+}
+
+void perfResetPythonCallbacks()
+{
+	perfCallbackCodes().clear();
+}
+
 // returns true if the Python callback szName always returns the same integer; then *plResult is set to it and
-// the caller does not need to call Python
+// the caller does not need to call Python (nor build the Python arguments)
 bool perfConstantPythonCallback(const char* szName, long* plResult)
 {
 	static int s_iEnabled = -1;
@@ -24,8 +38,7 @@ bool perfConstantPythonCallback(const char* szName, long* plResult)
 		return false;
 	}
 
-	// encoded answer of perfConstantCallback: 0 = must be called, 2*v+1 = always returns v
-	static std::map<std::string, long> s_mapCode;
+	std::map<std::string, long>& s_mapCode = perfCallbackCodes();
 	long lCode;
 	std::map<std::string, long>::iterator it = s_mapCode.find(szName);
 	if (it != s_mapCode.end())

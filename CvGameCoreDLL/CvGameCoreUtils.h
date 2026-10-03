@@ -356,5 +356,6 @@ void getUnitAIString(CvWString& szString, UnitAITypes eUnitAI);
 
 // Performance: Python callbacks that always return the same constant are not called (PerfPythonCallbacks.cpp)
 bool perfConstantPythonCallback(const char* szName, long* plResult);
+void perfResetPythonCallbacks();
 
 #endif

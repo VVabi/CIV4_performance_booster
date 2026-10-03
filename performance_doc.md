@@ -19,7 +19,7 @@ from the commit messages (different runs, so they do not add up exactly).
 | `MAP_SYMBOL_BATCHING` | 1 | Redraw road/yield symbols once per batch instead of on every change during AI turns. 0 = off. |
 | `PYTHON_SKIP_TRIVIAL_CALLBACKS` | 1 | Do not call Python callbacks that only return a constant. 0 = always call. |
 | `AUTOPLAY_SKIP_AUTOSAVE` | 1 | No autosaves while AI auto-play runs. |
-| `FIXED_RANDOM_SEED` | 12345 | Testing aid: every new game/scenario uses the same random numbers (0 = off). **Set to 0 for normal play.** |
+| `FIXED_RANDOM_SEED` | 0 | Testing aid: with a value > 0 (e.g. 12345), every new game/scenario uses the same random numbers. Keep 0 for normal play. |
 | `AUTOPLAY_RAND_LOG_TURN` | 0 | Turn whose random draws are logged to `AutoPlayRand.log` (0 = off). |
 | `PERF_MEMORY_LOG` | 0 | 1 = per-turn `Logs\PerfMemory.log`. |
 
@@ -129,13 +129,16 @@ invalidating changes.
 
 ### Python callbacks (`PerfPythonCallbacks.cpp`, `CvAppInterface.py`)
 The DLL calls many `CvGameUtils` callbacks for every unit update, city turn etc.; in unmodified BtS most
-only return False. `perfConstantCallback` (Python) inspects the bytecode once per session and callback: the
+only return False. `perfConstantCallback` (Python) inspects the bytecode once per game and callback (the
+answers are cleared in `CvGame::reset`, i.e. on every new game and load): the
 `CvGameInterface` function must be exactly `return gameUtils().<name>(argsList)` and the `CvGameUtils`
 method may only unpack its arguments and return a constant (no calls, no attribute access, except
-True/False/None). The DLL then uses the constant (`perfConstantPythonCallback`). Callbacks replaced by a mod
-are called as before. Used for 16 callbacks (`AI_unitUpdate`, `AI_doWar`, `AI_doDiplo`, `AI_chooseTech`,
-`doGrowth`, `doCulture`, `doPlotCulture`, `doProduction`, `doReligion`, `doGreatPeople`, `doMeltdown`,
-`doCombat`, `getUpgradePriceOverride`, ...). The outcome per callback is written to
+True/False/None). The DLL then uses the constant (`perfConstantPythonCallback`) and does not build the Python
+arguments either. Callbacks replaced by a mod are called as before. The DLL asks for 16 callbacks; in
+unmodified BtS 15 of them are skipped: `AI_unitUpdate`, `AI_chooseProduction`, `AI_doWar`, `AI_doDiplo`,
+`doGold`, `doResearch`, `doGrowth`, `doCulture`, `doPlotCulture`, `doProduction`, `doReligion`,
+`doGreatPeople`, `doMeltdown`, `doCombat`, `getUpgradePriceOverride`. `AI_chooseTech` is still called,
+because it returns `TechTypes.NO_TECH` (attribute access). The outcome per callback is written to
 `Logs\PerfPythonCallbacks.log`. Together with `AUTOPLAY_SKIP_AUTOSAVE`: wall clock 210.2 s -> 194.8 s, DLL
 154.3 s -> 141.4 s.
 

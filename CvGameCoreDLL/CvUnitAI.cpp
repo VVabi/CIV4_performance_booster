@@ -82,11 +82,14 @@ bool CvUnitAI::AI_update()
 	long lResult=0;
 	{
 		PROFILE("Python: AI_unitUpdate");
-		CyUnit* pyUnit = new CyUnit(this);
-		CyArgsList argsList;
-		argsList.add(gDLL->getPythonIFace()->makePythonObject(pyUnit));	// pass in unit class
-		if (!perfConstantPythonCallback("AI_unitUpdate", &lResult)) gDLL->getPythonIFace()->callFunction(PYGameModule, "AI_unitUpdate", argsList.makeFunctionArgs(), &lResult);
-		delete pyUnit;	// python fxn must not hold on to this pointer
+		if (!perfConstantPythonCallback("AI_unitUpdate", &lResult))
+		{
+			CyUnit* pyUnit = new CyUnit(this);
+			CyArgsList argsList;
+			argsList.add(gDLL->getPythonIFace()->makePythonObject(pyUnit));	// pass in unit class
+			gDLL->getPythonIFace()->callFunction(PYGameModule, "AI_unitUpdate", argsList.makeFunctionArgs(), &lResult);
+			delete pyUnit;	// python fxn must not hold on to this pointer
+		}
 	}
 	if (lResult == 1)
 	{
@@ -628,7 +631,8 @@ void CvUnitAI::AI_upgrade()
 				int iNewValue = kPlayer.AI_unitValue(((UnitTypes)iI), eUnitAI, pArea);
 				if ((iPass == 0 || iNewValue > 0) && iNewValue > iCurrentValue)
 				{
-					if (canUpgrade((UnitTypes)iI))
+					// with cached strategies canUpgrade() already succeeded above, and nothing since changed the game
+					if (bCheckUpgradeFirst || canUpgrade((UnitTypes)iI))
 					{
 						int iValue = (1 + GC.getGameINLINE().getSorenRandNum(10000, "AI Upgrade"));
 

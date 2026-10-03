@@ -190,7 +190,7 @@ def perfPythonObjectCount():
 	import gc
 	return len(gc.get_objects())
 
-# Performance: which CvGameUtils callbacks always return the same constant (checked once per session by the DLL,
+# Performance: which CvGameUtils callbacks always return the same constant (checked once per game by the DLL,
 # see PerfPythonCallbacks.cpp). A callback qualifies only if the CvGameInterface function is exactly
 # "return gameUtils().<name>(argsList)" and the CvGameUtils method only unpacks its arguments and returns a
 # constant (no calls, no global or attribute access except True/False/None). Anything else is always called.

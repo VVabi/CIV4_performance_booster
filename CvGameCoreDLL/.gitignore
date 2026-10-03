@@ -1,7 +1,9 @@
-Release/
-Assert/
-Debug/
-Profile/
-temp_files/
-build.log
-Timing/
+# build output of build.bat, only directly in this folder (unanchored, "Debug/" also matched
+# Boost-1.32.0/include/boost/preprocessor/debug and boost/spirit/debug on Windows)
+/Release/
+/Assert/
+/Debug/
+/Profile/
+/temp_files/
+/build.log
+/Timing/

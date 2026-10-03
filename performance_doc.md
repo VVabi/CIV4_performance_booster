@@ -115,6 +115,15 @@ that first request computed them later from a different game state and changed a
   only returns a constant (and is therefore skipped, see the Python callbacks below) and the `canTrain` /
   `cannotTrain` callbacks are off. Otherwise (a mod with such callbacks) the original loop runs.
 
+### Carrier positions (`CvUnitAI::AI_carrierSeaTransport`)
+For an AI carrier with aircraft the function scans every water plot next to land and, for each one, every plot
+within the aircraft's range: does it hold a city or improvement of a team we are at war with or plan war against
+(`isBarbarian`, `potentialWarAction` -> `isEnemy`/`atWar`, war plans). On island maps most water plots are next to
+land, so one call cost ~28 ms (`tinyIslands`: 1789 calls, 50.5 s, only 2.8 s of it path searches). The value of a
+plot in range only depends on the plot and the carrier and nothing changes during the call, so it is calculated
+once per plot and call (`s_aiCarrierAirPlotValue`, stamped with a call id); the loops, their order and the path
+searches are unchanged. `tinyIslands` 500 turns: 289.4 s -> 227.6 s, identical; the other maps barely use it.
+
 ### Citizen evaluation cache (`CvCityAI`)
 `AI_beginCitizenEval()` / `AI_endCitizenEval()` (nestable) mark a window in which the caller only evaluates
 (`AI_plotValue`, `AI_specialistValue`) and does not change the city. Inside it, `AI_yieldValue` uses values

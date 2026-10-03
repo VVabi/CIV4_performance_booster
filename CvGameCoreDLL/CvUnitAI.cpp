@@ -13016,6 +13016,14 @@ bool CvUnitAI::AI_specialSeaTransportSpy()
 
 
 // Returns true if a mission was pushed...
+// Performance: what a plot within air range adds to a carrier position's value in AI_carrierSeaTransport (a city
+// and an improvement count 1 each, if the plot is not barbarian and potentialWarAction(plot) is true). It only
+// depends on the plot and the carrier, so it is calculated once per plot and call (stamp = call id) instead of once
+// for every candidate position that has the plot in range (up to ~170 per candidate on island maps).
+static std::vector<int> s_aiCarrierAirPlotStamp;
+static std::vector<int> s_aiCarrierAirPlotValue;
+static int s_iCarrierCallId = 0;
+
 bool CvUnitAI::AI_carrierSeaTransport()
 {
 	PROFILE_FUNC();
@@ -13051,6 +13059,15 @@ bool CvUnitAI::AI_carrierSeaTransport()
 	pBestPlot = NULL;
 	pBestCarrierPlot = NULL;
 
+	// Performance: new call id for the per-plot values (see s_aiCarrierAirPlotValue)
+	if ((int)s_aiCarrierAirPlotStamp.size() != GC.getMapINLINE().numPlotsINLINE() || s_iCarrierCallId >= MAX_INT - 1)
+	{
+		s_aiCarrierAirPlotStamp.assign(GC.getMapINLINE().numPlotsINLINE(), -1);
+		s_aiCarrierAirPlotValue.assign(GC.getMapINLINE().numPlotsINLINE(), 0);
+		s_iCarrierCallId = 0;
+	}
+	s_iCarrierCallId++;
+
 	for (iI = 0; iI < GC.getMapINLINE().numPlotsINLINE(); iI++)
 	{
 		pLoopPlot = GC.getMapINLINE().plotByIndexINLINE(iI);
@@ -13071,21 +13088,29 @@ bool CvUnitAI::AI_carrierSeaTransport()
 						{
 							if (plotDistance(pLoopPlot->getX_INLINE(), pLoopPlot->getY_INLINE(), pLoopPlotAir->getX_INLINE(), pLoopPlotAir->getY_INLINE()) <= iMaxAirRange)
 							{
-								if (!(pLoopPlotAir->isBarbarian()))
+								int iAirIndex = GC.getMapINLINE().plotNumINLINE(pLoopPlotAir->getX_INLINE(), pLoopPlotAir->getY_INLINE());
+								if (s_aiCarrierAirPlotStamp[iAirIndex] != s_iCarrierCallId)
 								{
-									if (potentialWarAction(pLoopPlotAir))
+									int iAirValue = 0;
+									if (!(pLoopPlotAir->isBarbarian()))
 									{
-										if (pLoopPlotAir->isCity())
+										if (potentialWarAction(pLoopPlotAir))
 										{
-											iValue++;
-										}
+											if (pLoopPlotAir->isCity())
+											{
+												iAirValue++;
+											}
 
-										if (pLoopPlotAir->getImprovementType() != NO_IMPROVEMENT)
-										{
-											iValue ++;
+											if (pLoopPlotAir->getImprovementType() != NO_IMPROVEMENT)
+											{
+												iAirValue++;
+											}
 										}
 									}
+									s_aiCarrierAirPlotStamp[iAirIndex] = s_iCarrierCallId;
+									s_aiCarrierAirPlotValue[iAirIndex] = iAirValue;
 								}
+								iValue += s_aiCarrierAirPlotValue[iAirIndex];
 							}
 						}
 					}

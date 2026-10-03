@@ -377,6 +377,11 @@ class CvEventManager:
 	def onGameEnd(self, argsList):
 		'Called at the End of the game'
 		print("Game is ending")
+		# CIV4_performance_booster: unattended run, see AUTORUN_FILE. After the game ends (e.g. the time limit) the
+		# game update stops, so onGameUpdate would never see the end of the auto-play: leave the game here
+		if (g_iAutoRunState == 2):
+			self.__logAutoRun("autorun: game over, exiting")
+			os._exit(0)
 		return
 
 	def onBeginGameTurn(self, argsList):

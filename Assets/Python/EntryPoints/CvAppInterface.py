@@ -192,8 +192,9 @@ def perfPythonObjectCount():
 
 # Performance: which CvGameUtils callbacks always return the same constant (checked once per game by the DLL,
 # see PerfPythonCallbacks.cpp). A callback qualifies only if the CvGameInterface function is exactly
-# "return gameUtils().<name>(argsList)" and the CvGameUtils method only unpacks its arguments and returns a
-# constant (no calls, no global or attribute access except True/False/None). Anything else is always called.
+# "return gameUtils().<name>(argsList)" and the CvGameUtils method only reads its arguments from argsList
+# ("x = argsList[k]" with a valid k, or unpacking all of them) and returns a constant (no calls, no global or
+# attribute access except True/False/None). Anything else is always called.
 # Return value for the DLL: 0 = must be called, 2*v+1 = always returns the integer (or bool) v.
 def _perfOpcodes():
 	try:
@@ -223,6 +224,7 @@ def _perfReachableOps(code, iHaveArgument):
 def perfConstantCallback(argsList):
 	try:
 		szName = argsList[0]
+		iNumArgs = argsList[1]	# number of values the DLL passes to this callback
 		import CvGameInterface
 		iHaveArgument, m = _perfOpcodes()
 		# the interface function must only forward to gameUtils()
@@ -248,23 +250,16 @@ def perfConstantCallback(argsList):
 		ops = _perfReachableOps(code, iHaveArgument)
 		if len(ops) < 2 or ops[-1][0] != m['RETURN_VALUE']:
 			return 0
-		tail = ops[:-1]
-		# "return -1": Python 2.4 compiles negative constants as LOAD_CONST 1, UNARY_NEGATIVE
-		bNegate = (tail[-1][0] == m.get('UNARY_NEGATIVE', 11))
+		body = ops[:-1]
+		# the returned constant: "return <constant>" or "return True/False/None"; "return -1": Python 2.4 compiles
+		# negative constants as LOAD_CONST 1, UNARY_NEGATIVE
+		bNegate = (body[-1][0] == m.get('UNARY_NEGATIVE', 11))
 		if bNegate:
-			tail = tail[:-1]
-		if len(tail) < 1:
-			return 0
-		allowed = [m['LOAD_FAST'], m['STORE_FAST'], m['LOAD_CONST'], m['BINARY_SUBSCR'], m['UNPACK_SEQUENCE'], m['POP_TOP'], m['LOAD_GLOBAL']]
-		for (op, arg) in tail:
-			if op not in allowed:
-				return 0
-			if op == m['LOAD_GLOBAL'] and code.co_names[arg] not in ('True', 'False', 'None'):
-				return 0
-		(op, arg) = tail[-1]
+			body = body[:-1]
+		(op, arg) = body[-1]
 		if op == m['LOAD_CONST']:
 			value = code.co_consts[arg]
-		elif op == m['LOAD_GLOBAL']:
+		elif op == m['LOAD_GLOBAL'] and code.co_names[arg] in ('True', 'False', 'None'):
 			value = {'True': True, 'False': False, 'None': None}[code.co_names[arg]]
 		else:
 			return 0
@@ -273,6 +268,33 @@ def perfConstantCallback(argsList):
 		value = int(value)
 		if bNegate:
 			value = -value
+		# before that only the two ways BtS reads the arguments, each directly from argsList (local 1, a tuple of
+		# iNumArgs values built by the DLL), so nothing can fail or call into an argument object:
+		#   x = argsList[k]       LOAD_FAST 1, LOAD_CONST k, BINARY_SUBSCR, STORE_FAST x   (0 <= k < iNumArgs)
+		#   a, b, ... = argsList  LOAD_FAST 1, UNPACK_SEQUENCE n, STORE_FAST a, b, ...     (n == iNumArgs)
+		# (STORE_FAST x with x >= 2: neither self nor argsList is overwritten)
+		prologue = body[:-1]
+		i = 0
+		while i < len(prologue):
+			if prologue[i] != (m['LOAD_FAST'], 1):
+				return 0
+			(op, arg) = prologue[i + 1]
+			if op == m['LOAD_CONST']:
+				k = code.co_consts[arg]
+				if type(k) != type(0) or k < 0 or k >= iNumArgs:
+					return 0
+				if prologue[i + 2][0] != m['BINARY_SUBSCR'] or prologue[i + 3][0] != m['STORE_FAST'] or prologue[i + 3][1] < 2:
+					return 0
+				i += 4
+			elif op == m['UNPACK_SEQUENCE']:
+				if arg != iNumArgs:
+					return 0
+				for j in range(arg):
+					if prologue[i + 2 + j][0] != m['STORE_FAST'] or prologue[i + 2 + j][1] < 2:
+						return 0
+				i += 2 + arg
+			else:
+				return 0
 		if value < -100000000 or value > 100000000:
 			return 0
 		return 2 * value + 1

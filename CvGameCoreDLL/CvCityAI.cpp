@@ -681,7 +681,7 @@ void CvCityAI::AI_chooseProduction()
 	long lResult=0;
 	{
 		PROFILE("Python: AI_chooseProduction");
-		if (!perfConstantPythonCallback("AI_chooseProduction", &lResult))
+		if (!perfConstantPythonCallback("AI_chooseProduction", 1, &lResult))
 		{
 			CyCity* pyCity = new CyCity(this);
 			CyArgsList argsList;

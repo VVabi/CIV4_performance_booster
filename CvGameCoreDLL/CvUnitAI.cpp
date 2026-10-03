@@ -584,7 +584,14 @@ void CvUnitAI::AI_upgrade()
 	// actually upgrade to it, and the unit's own value is only calculated when first needed. The random number
 	// is still drawn under exactly the same conditions. Without cached strategies the original order is kept,
 	// because AI_unitValue() may be the first to request them (see above).
-	bool bCheckUpgradeFirst = kPlayer.AI_isStrategyHashCached();
+	// The new order calls canUpgrade() for more unit types than the original, so it is also only used when the
+	// Python callbacks canUpgrade() can reach cannot notice: getUpgradePriceOverride (upgradePrice) only returns a
+	// constant (then it is not called at all, see perfConstantPythonCallback) and the canTrain / cannotTrain
+	// callbacks (getUpgradeCity -> CvCity::canTrain) are off. A mod with such callbacks gets the original order.
+	long lUpgradePriceOverride;
+	bool bCheckUpgradeFirst = kPlayer.AI_isStrategyHashCached() &&
+		!GC.getUSE_CAN_TRAIN_CALLBACK() && !GC.getUSE_CANNOT_TRAIN_CALLBACK() &&
+		perfConstantPythonCallback("getUpgradePriceOverride", &lUpgradePriceOverride);
 	int iCurrentValue = 0;
 	bool bCurrentValueKnown = false;
 	if (!bCheckUpgradeFirst)

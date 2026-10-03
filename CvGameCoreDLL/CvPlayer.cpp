@@ -2494,11 +2494,11 @@ void CvPlayer::doTurn()
 	FAssertMsg(isAlive(), "isAlive is expected to be true");
 	FAssertMsg(!hasBusyUnit() || GC.getGameINLINE().isMPOption(MPOPTION_SIMULTANEOUS_TURNS)  || GC.getGameINLINE().isSimultaneousTeamTurns(), "End of turn with busy units in a sequential-turn game");
 
-	CvEventReporter::getInstance().beginPlayerTurn( GC.getGameINLINE().getGameTurn(),  getID());
+	{ PROFILE("player doTurn: beginPlayerTurn event (Python)"); CvEventReporter::getInstance().beginPlayerTurn( GC.getGameINLINE().getGameTurn(),  getID()); }
 
-	doUpdateCacheOnTurn();
+	{ PROFILE("player doTurn: doUpdateCacheOnTurn"); doUpdateCacheOnTurn(); }
 
-	GC.getGameINLINE().verifyDeals();
+	{ PROFILE("player doTurn: verifyDeals"); GC.getGameINLINE().verifyDeals(); }
 
 	AI_doTurnPre();
 
@@ -2521,13 +2521,13 @@ void CvPlayer::doTurn()
 		setCommercePercent(COMMERCE_ESPIONAGE, 0);
 	}
 
-	verifyGoldCommercePercent();
+	{ PROFILE("player doTurn: verifyGoldCommercePercent"); verifyGoldCommercePercent(); }
 
-	doGold();
+	{ PROFILE("player doTurn: doGold"); doGold(); }
 
-	doResearch();
+	{ PROFILE("player doTurn: doResearch"); doResearch(); }
 
-	doEspionagePoints();
+	{ PROFILE("player doTurn: doEspionagePoints"); doEspionagePoints(); }
 
 	for (pLoopCity = firstCity(&iLoop); pLoopCity != NULL; pLoopCity = nextCity(&iLoop))
 	{
@@ -2544,14 +2544,16 @@ void CvPlayer::doTurn()
 		changeAnarchyTurns(-1);
 	}
 
-	verifyCivics();
+	{ PROFILE("player doTurn: verifyCivics"); verifyCivics(); }
 
-	updateTradeRoutes();
+	{ PROFILE("player doTurn: updateTradeRoutes"); updateTradeRoutes(); }
 
-	updateWarWearinessPercentAnger();
+	{ PROFILE("player doTurn: updateWarWearinessPercentAnger"); updateWarWearinessPercentAnger(); }
 
-	doEvents();
+	{ PROFILE("player doTurn: doEvents"); doEvents(); }
 
+	{
+	PROFILE("player doTurn: history and messages");
 	updateEconomyHistory(GC.getGameINLINE().getGameTurn(), calculateTotalCommerce());
 	updateIndustryHistory(GC.getGameINLINE().getGameTurn(), calculateTotalYield(YIELD_PRODUCTION));
 	updateAgricultureHistory(GC.getGameINLINE().getGameTurn(), calculateTotalYield(YIELD_FOOD));
@@ -2559,12 +2561,13 @@ void CvPlayer::doTurn()
 	updateCultureHistory(GC.getGameINLINE().getGameTurn(), countTotalCulture());
 	updateEspionageHistory(GC.getGameINLINE().getGameTurn(), GET_TEAM(getTeam()).getEspionagePointsEver());
 	expireMessages();  // turn log
+	}
 
 	gDLL->getInterfaceIFace()->setDirty(CityInfo_DIRTY_BIT, true);
 
 	AI_doTurnPost();
 
-	CvEventReporter::getInstance().endPlayerTurn( GC.getGameINLINE().getGameTurn(),  getID());
+	{ PROFILE("player doTurn: endPlayerTurn event (Python)"); CvEventReporter::getInstance().endPlayerTurn( GC.getGameINLINE().getGameTurn(),  getID()); }
 }
 
 
@@ -5140,7 +5143,6 @@ void CvPlayer::found(int iX, int iY)
 
 bool CvPlayer::canTrain(UnitTypes eUnit, bool bContinue, bool bTestVisible, bool bIgnoreCost) const
 {
-	PROFILE_FUNC();
 
 	UnitClassTypes eUnitClass;
 	int iI;
@@ -5958,7 +5960,6 @@ void CvPlayer::processBuilding(BuildingTypes eBuilding, int iChange, CvArea* pAr
 
 bool CvPlayer::canBuild(const CvPlot* pPlot, BuildTypes eBuild, bool bTestEra, bool bTestVisible) const
 {
-	PROFILE_FUNC();
 
 	if (!(pPlot->canBuild(eBuild, getID(), bTestVisible)))
 	{
@@ -6013,7 +6014,6 @@ int CvPlayer::getBuildCost(const CvPlot* pPlot, BuildTypes eBuild) const
 
 RouteTypes CvPlayer::getBestRoute(CvPlot* pPlot) const
 {
-	PROFILE_FUNC();
 
 	RouteTypes eRoute;
 	RouteTypes eBestRoute;
@@ -6024,11 +6024,30 @@ RouteTypes CvPlayer::getBestRoute(CvPlot* pPlot) const
 	iBestValue = 0;
 	eBestRoute = NO_ROUTE;
 
-	for (iI = 0; iI < GC.getNumBuildInfos(); iI++)
+	// Performance: only the build types that build a route (XML data, same order as looping over all build
+	// types), and the checks are skipped for routes that could not beat the best one anyway (unless the python
+	// canBuild callback is enabled: it is observable, so it is called for every route build as before)
+	static std::vector<int> s_aiRouteBuilds;
+	static int s_iRouteBuildsFor = -1;
+	if (s_iRouteBuildsFor != GC.getNumBuildInfos())
 	{
+		s_aiRouteBuilds.clear();
+		for (iI = 0; iI < GC.getNumBuildInfos(); iI++)
+		{
+			if (GC.getBuildInfo((BuildTypes)iI).getRoute() != NO_ROUTE)
+			{
+				s_aiRouteBuilds.push_back(iI);
+			}
+		}
+		s_iRouteBuildsFor = GC.getNumBuildInfos();
+	}
+
+	for (int iRouteBuild = 0; iRouteBuild < (int)s_aiRouteBuilds.size(); iRouteBuild++)
+	{
+		iI = s_aiRouteBuilds[iRouteBuild];
 		eRoute = ((RouteTypes)(GC.getBuildInfo((BuildTypes)iI).getRoute()));
 
-		if (eRoute != NO_ROUTE)
+		if (eRoute != NO_ROUTE && (GC.getUSE_CAN_BUILD_CALLBACK() || GC.getRouteInfo(eRoute).getValue() > iBestValue))
 		{
 			if ((pPlot != NULL) ? ((pPlot->getRouteType() == eRoute) || canBuild(pPlot, ((BuildTypes)iI))) : GET_TEAM(getTeam()).isHasTech((TechTypes)(GC.getBuildInfo((BuildTypes)iI).getTechPrereq())))
 			{
@@ -9661,6 +9680,8 @@ void CvPlayer::setTurnActiveForPbem(bool bActive)
 }
 
 
+void PerfMemoryLogTurnStart();	// PerfMemoryLog.cpp
+
 void CvPlayer::setTurnActive(bool bNewValue, bool bDoTurn)
 {
 	int iI;
@@ -9669,20 +9690,32 @@ void CvPlayer::setTurnActive(bool bNewValue, bool bDoTurn)
 	{
 		m_bTurnActive = bNewValue;
 
-#ifdef VABI_PROFILE
+		// a human's turn starts: show the map symbols batched during the AI turns (MAP_SYMBOL_BATCHING)
+		if (bNewValue && isHuman())
+		{
+			CvPlot::flushMapSymbols();
+		}
+
+#ifdef PERF_PROFILE
 		// timing profiler: one report per turn of the active player's civilization (also during AI auto-play)
 		if (getID() == GC.getGameINLINE().getActivePlayer())
 		{
 			if (bNewValue)
 			{
-				VabiProfOnActiveTurnStart();
+				PerfProfOnActiveTurnStart();
 			}
 			else
 			{
-				VabiProfOnActiveTurnEnd(isHuman());
+				PerfProfOnActiveTurnEnd(isHuman());
 			}
 		}
 #endif
+
+		// one line of memory statistics per turn of the active player's civilization (LogsPerfMemory.log, PERF_MEMORY_LOG)
+		if (bNewValue && getID() == GC.getGameINLINE().getActivePlayer())
+		{
+			PerfMemoryLogTurnStart();
+		}
 
 		if (isTurnActive())
 		{
@@ -12612,7 +12645,7 @@ void CvPlayer::doGold()
 	CyArgsList argsList;
 	argsList.add(getID());
 	long lResult=0;
-	gDLL->getPythonIFace()->callFunction(PYGameModule, "doGold", argsList.makeFunctionArgs(), &lResult);
+	if (!perfConstantPythonCallback("doGold", 1, &lResult)) gDLL->getPythonIFace()->callFunction(PYGameModule, "doGold", argsList.makeFunctionArgs(), &lResult);
 	if (lResult == 1)
 	{
 		return;
@@ -12671,7 +12704,7 @@ void CvPlayer::doResearch()
 	CyArgsList argsList;
 	argsList.add(getID());
 	long lResult=0;
-	gDLL->getPythonIFace()->callFunction(PYGameModule, "doResearch", argsList.makeFunctionArgs(), &lResult);
+	if (!perfConstantPythonCallback("doResearch", 1, &lResult)) gDLL->getPythonIFace()->callFunction(PYGameModule, "doResearch", argsList.makeFunctionArgs(), &lResult);
 	if (lResult == 1)
 	{
 		return;

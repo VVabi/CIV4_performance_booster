@@ -319,6 +319,7 @@ bool PUF_isFiniteRange(const CvUnit* pUnit, int iData1 = -1, int iData2 = -1);
 int potentialIrrigation(FAStarNode* parent, FAStarNode* node, int data, const void* pointer, FAStar* finder);
 int checkFreshWater(FAStarNode* parent, FAStarNode* node, int data, const void* pointer, FAStar* finder);
 int changeIrrigated(FAStarNode* parent, FAStarNode* node, int data, const void* pointer, FAStar* finder);
+void startPathSearch(const void* pGroup);	// Performance: call right before every GeneratePath with pathDestValid/pathCost/...
 int pathDestValid(int iToX, int iToY, const void* pointer, FAStar* finder);
 int pathHeuristic(int iFromX, int iFromY, int iToX, int iToY);
 int pathCost(FAStarNode* parent, FAStarNode* node, int data, const void* pointer, FAStar* finder);
@@ -352,5 +353,9 @@ void getActivityTypeString(CvWString& szString, ActivityTypes eActivityType);
 void getMissionTypeString(CvWString& szString, MissionTypes eMissionType);
 void getMissionAIString(CvWString& szString, MissionAITypes eMissionAI);
 void getUnitAIString(CvWString& szString, UnitAITypes eUnitAI);
+
+// Performance: Python callbacks that always return the same constant are not called (PerfPythonCallbacks.cpp)
+bool perfConstantPythonCallback(const char* szName, int iNumArgs, long* plResult);	// iNumArgs: values the DLL passes to it
+void perfResetPythonCallbacks();
 
 #endif

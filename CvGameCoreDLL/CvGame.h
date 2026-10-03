@@ -44,6 +44,8 @@ public:
 	DllExport void normalizeStartingPlots();
 
 	DllExport void update();
+	void runGameLogicStep();		// one step of game logic, no drawing (the body of the original update; the exe draws after update returns)
+	bool canRunExtraFrame() const;
 	DllExport void updateScore(bool bForce = false);
 
 	DllExport void updateColoredPlots();

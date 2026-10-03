@@ -420,6 +420,9 @@ void CvGame::reset(HandicapTypes eHandicap, bool bConstructorCall)
 	// Uninit class
 	uninit();
 
+	// Performance: check the Python callbacks again for this game (new game or load)
+	perfResetPythonCallbacks();
+
 	m_iElapsedGameTurns = 0;
 	m_iStartTurn = 0;
 	m_iStartYear = 0;
@@ -2049,20 +2052,87 @@ int CvGame::getTeamClosenessScore(int** aaiDistances, int* aiStartingLocs)
 }
 
 
+// Performance: while only the AI moves, several game logic steps run per frame of the exe instead of one
+// (AI_FRAME_TIME_BUDGET_MS in GlobalDefinesAlt.xml, 0 = one per frame as in BtS). Each extra step is the
+// complete game logic of one frame (runGameLogicStep, no drawing: the exe draws after update returns), so the
+// game goes through exactly the same sequence of steps as with one step per exe frame; only the redrawing in
+// between is skipped.
 void CvGame::update()
 {
 	PROFILE("CvGame::update");
 
 	if (!gDLL->GetWorldBuilderMode() || isInAdvancedStart())
 	{
-		sendPlayerOptions();
+		runGameLogicStep();
+
+		int iBudgetMs = GC.getDefineINT("AI_FRAME_TIME_BUDGET_MS");
+		if (iBudgetMs > 0)
+		{
+			DWORD dwStart = timeGetTime();
+			// 1000 is only a safety cap against spinning through empty steps; the loop normally ends through
+			// canRunExtraFrame() or the time budget (500-turn Pangea run: about 7 logic steps per game turn)
+			for (int iFrame = 0; iFrame < 1000; iFrame++)
+			{
+				if (!canRunExtraFrame() || (int)(timeGetTime() - dwStart) >= iBudgetMs)
+				{
+					break;
+				}
+				PROFILE("CvGame::update extra frame");
+				runGameLogicStep();
+			}
+		}
+	}
+}
+
+// extra frames only while nobody could interact: single player, no human turn, no diplomacy screen and no
+// diplomacy or popup waiting to be shown (an AI contact via beginDiplomacy must reach the screen before the AI
+// moves on, as with one frame per exe frame). During AI auto-play nothing is ever waiting (measured: 0 of 3282
+// checks in the 500-turn Pangea run), so auto-play keeps its extra frames.
+bool CvGame::canRunExtraFrame() const
+{
+	if (isNetworkMultiPlayer() || isHotSeat() || isPbem())
+	{
+		return false;
+	}
+	if (getGameState() == GAMESTATE_OVER)
+	{
+		return false;
+	}
+	if (gDLL->GetWorldBuilderMode() || gDLL->getInterfaceIFace()->isInAdvancedStart())
+	{
+		return false;
+	}
+	if (gDLL->isDiplomacy() || gDLL->getInterfaceIFace()->isDiploOrPopupWaiting())
+	{
+		return false;
+	}
+	for (int iI = 0; iI < MAX_PLAYERS; iI++)
+	{
+		const CvPlayer& kPlayer = GET_PLAYER((PlayerTypes)iI);
+		if (kPlayer.isAlive() && kPlayer.isHuman() && kPlayer.isTurnActive())
+		{
+			return false;
+		}
+	}
+	return true;
+}
+
+void CvGame::runGameLogicStep()
+{
+	{
+		{ PROFILE("frame: sendPlayerOptions"); sendPlayerOptions(); }
 
 		// sample generic event
+		{
+		PROFILE("frame: gameUpdate event (Python)");
 		CyArgsList pyArgs;
 		pyArgs.add(getTurnSlice());
 		CvEventReporter::getInstance().genericEvent("gameUpdate", pyArgs.makeFunctionArgs());
+		}
 
-		if (getTurnSlice() == 0)
+		// AUTOPLAY_SKIP_AUTOSAVE: also no initial autosave when auto-play was just started (e.g. by the gameUpdate
+		// event above, see the autorun in CvEventManager.py), as for the autosave at the end of doTurn
+		if (getTurnSlice() == 0 && (getAIAutoPlay() == 0 || GC.getDefineINT("AUTOPLAY_SKIP_AUTOSAVE") <= 0))
 		{
 			gDLL->getEngineIFace()->AutoSave(true);
 		}
@@ -2075,19 +2145,19 @@ void CvGame::update()
 			}
 		}
 
-		updateScore();
+		{ PROFILE("frame: updateScore"); updateScore(); }
 
-		updateWar();
+		{ PROFILE("frame: updateWar"); updateWar(); }
 
-		updateMoves();
+		{ PROFILE("frame: updateMoves"); updateMoves(); }
 
-		updateTimers();
+		{ PROFILE("frame: updateTimers"); updateTimers(); }
 
-		updateTurnTimer();
+		{ PROFILE("frame: updateTurnTimer"); updateTurnTimer(); }
 
-		AI_updateAssignWork();
+		{ PROFILE("frame: AI_updateAssignWork"); AI_updateAssignWork(); }
 
-		testAlive();
+		{ PROFILE("frame: testAlive"); testAlive(); }
 
 		if ((getAIAutoPlay() == 0) && !(gDLL->GetAutorun()) && GAMESTATE_EXTENDED != getGameState())
 		{
@@ -3903,6 +3973,7 @@ void CvGame::setAIAutoPlay(int iNewValue)
 			else if ((iOldValue > 0) && (getAIAutoPlay() == 0))
 			{
 				GET_PLAYER(getActivePlayer()).setHumanDisabled(false);
+				CvPlot::flushMapSymbols();	// show the map symbols batched during auto-play
 			}
 		}
 
@@ -3912,8 +3983,8 @@ void CvGame::setAIAutoPlay(int iNewValue)
 			s_iAutoPlayStartTurn = getGameTurn();
 			s_iAutoPlayPlannedTurns = getAIAutoPlay();
 			s_dwAutoPlayStartTime = timeGetTime();
-#ifdef VABI_PROFILE
-			VabiProfOnAutoPlayStart();
+#ifdef PERF_PROFILE
+			PerfProfOnAutoPlayStart();
 #endif
 		}
 		else if ((iOldValue > 0) && (getAIAutoPlay() == 0) && (s_iAutoPlayStartTurn >= 0))
@@ -3929,8 +4000,8 @@ void CvGame::setAIAutoPlay(int iNewValue)
 				s_iAutoPlayStartTurn, iEndTurn, iRounds, s_iAutoPlayPlannedTurns, bStoppedEarly ? " (stopped early)" : "",
 				fSeconds, fSeconds / std::max(1, iRounds));
 			gDLL->logMsg("AutoPlay.log", szLine.c_str(), false, true);
-#ifdef VABI_PROFILE
-			VabiProfOnAutoPlayEnd(s_iAutoPlayStartTurn, iEndTurn, bStoppedEarly);
+#ifdef PERF_PROFILE
+			PerfProfOnAutoPlayEnd(s_iAutoPlayStartTurn, iEndTurn, bStoppedEarly);
 #endif
 			s_iAutoPlayStartTurn = -1;
 		}
@@ -5621,36 +5692,42 @@ void CvGame::doTurn()
 	int iLoopPlayer;
 	int iI;
 
+	// map symbols batched during the AI turns of the round that just ended (MAP_SYMBOL_BATCHING)
+	CvPlot::flushMapSymbols();
+
 	// END OF TURN
-	CvEventReporter::getInstance().beginGameTurn( getGameTurn() );
+	{ PROFILE("doTurn: beginGameTurn event (Python)"); CvEventReporter::getInstance().beginGameTurn( getGameTurn() ); }
 
-	doUpdateCacheOnTurn();
+	{ PROFILE("doTurn: doUpdateCacheOnTurn"); doUpdateCacheOnTurn(); }
 
-	updateScore();
+	{ PROFILE("doTurn: updateScore"); updateScore(); }
 
-	doDeals();
+	{ PROFILE("doTurn: doDeals"); doDeals(); }
 
-	for (iI = 0; iI < MAX_TEAMS; iI++)
 	{
-		if (GET_TEAM((TeamTypes)iI).isAlive())
+		PROFILE("doTurn: teams doTurn");
+		for (iI = 0; iI < MAX_TEAMS; iI++)
 		{
-			GET_TEAM((TeamTypes)iI).doTurn();
+			if (GET_TEAM((TeamTypes)iI).isAlive())
+			{
+				GET_TEAM((TeamTypes)iI).doTurn();
+			}
 		}
 	}
 
-	GC.getMapINLINE().doTurn();
+	{ PROFILE("doTurn: map doTurn"); GC.getMapINLINE().doTurn(); }
 
-	createBarbarianCities();
+	{ PROFILE("doTurn: createBarbarianCities"); createBarbarianCities(); }
 
-	createBarbarianUnits();
+	{ PROFILE("doTurn: createBarbarianUnits"); createBarbarianUnits(); }
 
-	doGlobalWarming();
+	{ PROFILE("doTurn: doGlobalWarming"); doGlobalWarming(); }
 
-	doHolyCity();
+	{ PROFILE("doTurn: doHolyCity"); doHolyCity(); }
 
-	doHeadquarters();
+	{ PROFILE("doTurn: doHeadquarters"); doHeadquarters(); }
 
-	doDiploVote();
+	{ PROFILE("doTurn: doDiploVote"); doDiploVote(); }
 
 	gDLL->getInterfaceIFace()->setEndTurnMessage(false);
 	gDLL->getInterfaceIFace()->setHasMovedUnit(false);
@@ -5699,11 +5776,13 @@ void CvGame::doTurn()
 		}
 	}
 
-	CvEventReporter::getInstance().endGameTurn(getGameTurn());
+	{ PROFILE("doTurn: endGameTurn event (Python)"); CvEventReporter::getInstance().endGameTurn(getGameTurn()); }
 
-	incrementGameTurn();
+	{ PROFILE("doTurn: incrementGameTurn"); incrementGameTurn(); }
 	incrementElapsedGameTurns();
 
+	{
+	PROFILE("doTurn: activate players (setTurnActive)");
 	if (isMPOption(MPOPTION_SIMULTANEOUS_TURNS))
 	{
 		shuffleArray(aiShuffle, MAX_PLAYERS, getSorenRand());
@@ -5762,16 +5841,24 @@ void CvGame::doTurn()
 		}
 	}
 
-	testVictory();
+	}
+
+	{ PROFILE("doTurn: testVictory"); testVictory(); }
 
 	gDLL->getEngineIFace()->SetDirty(GlobePartialTexture_DIRTY_BIT, true);
-	gDLL->getEngineIFace()->DoTurn();
+	{ PROFILE("doTurn: engine DoTurn (exe)"); gDLL->getEngineIFace()->DoTurn(); }
 
 	PROFILE_END();
 
 	stopProfilingDLL();
 
-	gDLL->getEngineIFace()->AutoSave();
+	// AUTOPLAY_SKIP_AUTOSAVE = 1: no autosaves during AI auto-play (normal games are not affected; the turn that
+	// ends an auto-play run is saved as usual, because the auto-play counter is already 0 then)
+	if (getAIAutoPlay() == 0 || GC.getDefineINT("AUTOPLAY_SKIP_AUTOSAVE") <= 0)
+	{
+		PROFILE("doTurn: AutoSave (exe)");
+		gDLL->getEngineIFace()->AutoSave();
+	}
 }
 
 

@@ -137,6 +137,11 @@ void CvCityAI::AI_reset()
 	m_iNeededFloatingDefenders = -1;
 	m_iNeededFloatingDefendersCacheTurn = -1;
 
+	m_iCitizenEvalDepth = 0;
+	m_aiGoodTilesCache[0] = m_aiGoodTilesCache[1] = -1;
+	m_aiGoodSpecialistsCache[0] = m_aiGoodSpecialistsCache[1] = MIN_INT;
+	m_bEvalFoodValid = false;
+
 	m_iWorkersNeeded = 0;
 	m_iWorkersHave = 0;
 
@@ -166,31 +171,32 @@ void CvCityAI::AI_doTurn()
 	
     if (!isHuman())
 	{
+	    PROFILE("city AI_doTurn: AI_stealPlots");
 	    AI_stealPlots();
 	}
 
-	AI_updateWorkersNeededHere();
+	{ PROFILE("city AI_doTurn: AI_updateWorkersNeededHere"); AI_updateWorkersNeededHere(); }
 
 	AI_updateBestBuild();
 
-	AI_updateRouteToCity();
+	{ PROFILE("city AI_doTurn: AI_updateRouteToCity"); AI_updateRouteToCity(); }
 
 	if (isHuman())
 	{
 	    if (isProductionAutomated())
 	    {
-	        AI_doHurry();	        
+	        AI_doHurry();
 	    }
 		return;
 	}
-	
-	AI_doPanic();
 
-	AI_doDraft();
+	{ PROFILE("city AI_doTurn: AI_doPanic"); AI_doPanic(); }
 
-	AI_doHurry();
+	{ PROFILE("city AI_doTurn: AI_doDraft"); AI_doDraft(); }
 
-	AI_doEmphasize();
+	{ PROFILE("city AI_doTurn: AI_doHurry"); AI_doHurry(); }
+
+	{ PROFILE("city AI_doTurn: AI_doEmphasize"); AI_doEmphasize(); }
 }
 
 
@@ -675,11 +681,14 @@ void CvCityAI::AI_chooseProduction()
 	long lResult=0;
 	{
 		PROFILE("Python: AI_chooseProduction");
-		CyCity* pyCity = new CyCity(this);
-		CyArgsList argsList;
-		argsList.add(gDLL->getPythonIFace()->makePythonObject(pyCity));	// pass in city class
-		gDLL->getPythonIFace()->callFunction(PYGameModule, "AI_chooseProduction", argsList.makeFunctionArgs(), &lResult);
-		delete pyCity;	// python fxn must not hold on to this pointer
+		if (!perfConstantPythonCallback("AI_chooseProduction", 1, &lResult))
+		{
+			CyCity* pyCity = new CyCity(this);
+			CyArgsList argsList;
+			argsList.add(gDLL->getPythonIFace()->makePythonObject(pyCity));	// pass in city class
+			gDLL->getPythonIFace()->callFunction(PYGameModule, "AI_chooseProduction", argsList.makeFunctionArgs(), &lResult);
+			delete pyCity;	// python fxn must not hold on to this pointer
+		}
 	}
 	if (lResult == 1)
 	{
@@ -5260,6 +5269,9 @@ void CvCityAI::AI_updateBestBuild()
 	}
 	
 	
+	// Performance: the block below only changes the best build values, which the values cached for
+	// AI_yieldValue do not depend on (see AI_beginCitizenEval)
+	AI_beginCitizenEval();
 	{	//new experimental yieldValue calcuation
 		short aiYields[NUM_YIELD_TYPES];
 		int iBestPlot = -1;
@@ -5365,6 +5377,7 @@ void CvCityAI::AI_updateBestBuild()
 			}
 		}
 	}
+	AI_endCitizenEval();
 }
 
 // Protected Functions...
@@ -6309,6 +6322,8 @@ bool CvCityAI::AI_addBestCitizen(bool bWorkers, bool bSpecialists, int* piBestPl
 {
 	PROFILE_FUNC();
 
+	AI_beginCitizenEval(); // evaluation only until AI_endCitizenEval()
+
 	bool bAvoidGrowth = AI_avoidGrowth();
 	bool bIgnoreGrowth = AI_ignoreGrowth();
 	bool bIsSpecialistForced = false;
@@ -6425,6 +6440,8 @@ bool CvCityAI::AI_addBestCitizen(bool bWorkers, bool bSpecialists, int* piBestPl
 		}
 	}
 	
+	AI_endCitizenEval();
+
 	if (eBestSpecialist != NO_SPECIALIST)
 	{
 		changeSpecialistCount(eBestSpecialist, 1);
@@ -6485,6 +6502,7 @@ bool CvCityAI::AI_removeWorstCitizen(SpecialistTypes eIgnoreSpecialist)
 		}
 	}
 
+	AI_beginCitizenEval(); // evaluation only until AI_endCitizenEval()
 	bAvoidGrowth = AI_avoidGrowth();
 	bIgnoreGrowth = AI_ignoreGrowth();
 
@@ -6537,6 +6555,8 @@ bool CvCityAI::AI_removeWorstCitizen(SpecialistTypes eIgnoreSpecialist)
 			}
 		}
 	}
+
+	AI_endCitizenEval();
 
 	if (eWorstSpecialist != NO_SPECIALIST)
 	{
@@ -6598,6 +6618,7 @@ void CvCityAI::AI_juggleCitizens()
 			int iWorstPlot = -1;
 			int iValue;
 
+			AI_beginCitizenEval();	// Performance: read-only loop, see AI_beginCitizenEval
 			for (int iI = 0; iI < NUM_CITY_PLOTS; iI++)
 			{
 				if (iI != CITY_HOME_PLOT)
@@ -6620,6 +6641,7 @@ void CvCityAI::AI_juggleCitizens()
 						}
 					}
 				}
+			AI_endCitizenEval();
 
 			// if no worst plot, or we looped back around and are trying to remove the first plot we removed, stop
 			if (iWorstPlot == -1 || std::find(aWorstPlots.begin(), aWorstPlots.end(), iWorstPlot) != aWorstPlots.end())
@@ -6772,6 +6794,8 @@ bool CvCityAI::AI_foodAvailable(int iExtra)
 
 int CvCityAI::AI_yieldValue(short* piYields, short* piCommerceYields, bool bAvoidGrowth, bool bRemove, bool bIgnoreFood, bool bIgnoreGrowth, bool bIgnoreStarvation, bool bWorkerOptimization)
 {
+	PROFILE_FUNC();
+
 	const int iBaseProductionValue = 15;
 	const int iBaseCommerceValue = 7;
 	
@@ -6861,16 +6885,19 @@ int CvCityAI::AI_yieldValue(short* piYields, short* piCommerceYields, bool bAvoi
 		// we still prefer more food if everything else is equal
 		iValue += (aiYields[YIELD_FOOD] * 1);
 
-		int iFoodPerTurn = (foodDifference(false) - ((bRemove) ? aiYields[YIELD_FOOD] : 0));
-		int iFoodLevel = getFood();
-		int iFoodToGrow = growthThreshold();
-		int iHealthLevel = goodHealth() - badHealth(/*bNoAngry*/ false, 0);
-		int iHappinessLevel = (isNoUnhappiness() ? std::max(3, iHealthLevel + 5) : happyLevel() - unhappyLevel(0));
+		// Performance: these city values do not depend on the plot, so during a citizen evaluation they are
+		// calculated once (see AI_beginCitizenEval)
+		const CitizenEvalFoodData& kFood = AI_getCitizenEvalFoodData();
+		int iFoodPerTurn = (kFood.iFoodDifference - ((bRemove) ? aiYields[YIELD_FOOD] : 0));
+		int iFoodLevel = kFood.iFood;
+		int iFoodToGrow = kFood.iGrowthThreshold;
+		int iHealthLevel = kFood.iHealthLevel;
+		int iHappinessLevel = kFood.iHappinessLevel;
 		int iPopulation = getPopulation();
-		int	iExtraPopulationThatCanWork = std::min(iPopulation - range(-iHappinessLevel, 0, iPopulation) + std::min(0, extraFreeSpecialists()) , NUM_CITY_PLOTS) - getWorkingPopulation() + ((bRemove) ? 1 : 0);
+		int	iExtraPopulationThatCanWork = std::min(iPopulation - range(-iHappinessLevel, 0, iPopulation) + std::min(0, kFood.iExtraFreeSpecialists) , NUM_CITY_PLOTS) - kFood.iWorkingPopulation + ((bRemove) ? 1 : 0);
 		int iConsumtionPerPop = GC.getFOOD_CONSUMPTION_PER_POPULATION();
 
-		int iAdjustedFoodDifference = (getYieldRate(YIELD_FOOD) + std::min(0, iHealthLevel)) - ((iPopulation + std::min(0, iHappinessLevel) - ((bRemove) ? 1 : 0)) * iConsumtionPerPop);
+		int iAdjustedFoodDifference = (kFood.iFoodRate + std::min(0, iHealthLevel)) - ((iPopulation + std::min(0, iHappinessLevel) - ((bRemove) ? 1 : 0)) * iConsumtionPerPop);
 		
 		// if we not human, allow us to starve to half full if avoiding growth
 		if (!bIgnoreStarvation)
@@ -7090,10 +7117,10 @@ int CvCityAI::AI_yieldValue(short* piYields, short* piCommerceYields, bool bAvoi
 				if (bCanPopRush && (iHappinessLevel > 0))
 				{
 					iSlaveryValue = 30 * 14 * std::max(0, aiYields[YIELD_FOOD] - ((iHealthLevel < 0) ? 1 : 0));
-					iSlaveryValue /= std::max(10, (growthThreshold() * (100 - getMaxFoodKeptPercent())));
+					iSlaveryValue /= std::max(10, (iFoodToGrow * (100 - getMaxFoodKeptPercent())));
 					
 					iSlaveryValue *= 100;
-					iSlaveryValue /= getHurryCostModifier(true);
+					iSlaveryValue /= kFood.iHurryCostModifier;
 					
 					iSlaveryValue *= iConsumtionPerPop * 2;
 					iSlaveryValue /= iConsumtionPerPop * 2 + std::max(0, iAdjustedFoodDifference);
@@ -7304,9 +7331,12 @@ int CvCityAI::AI_plotValue(CvPlot* pPlot, bool bAvoidGrowth, bool bRemove, bool 
 	iValue = 0;
 	iTotalDiff = 0;
 
+	{
+	PROFILE("AI_plotValue plot yields");
 	for (iI = 0; iI < NUM_YIELD_TYPES; iI++)
 	{
 		aiYields[iI] = pPlot->getYield((YieldTypes)iI);
+	}
 	}
 
 	eCurrentImprovement = pPlot->getImprovementType();
@@ -7346,6 +7376,7 @@ int CvCityAI::AI_plotValue(CvPlot* pPlot, bool bAvoidGrowth, bool bRemove, bool 
 			iYieldValue /= 16;
 	iValue += iYieldValue;
 
+	PROFILE_BEGIN("AI_plotValue bonus discover");
 	if (eCurrentImprovement != NO_IMPROVEMENT)
 	{
 		if (pPlot->getBonusType(getTeam()) == NO_BONUS) // XXX double-check CvGame::doFeature that the checks are the same...
@@ -7362,6 +7393,7 @@ int CvCityAI::AI_plotValue(CvPlot* pPlot, bool bAvoidGrowth, bool bRemove, bool 
 			}
 		}
 	}
+	PROFILE_END();
 
 	if ((eCurrentImprovement != NO_IMPROVEMENT) && (GC.getImprovementInfo(pPlot->getImprovementType()).getImprovementUpgrade() != NO_IMPROVEMENT))
 	{
@@ -8581,6 +8613,13 @@ int CvCityAI::AI_getPlotMagicValue(CvPlot* pPlot, bool bHealthy, bool bWorkerOpt
 //if healthy is false it assumes bad health conditions.
 int CvCityAI::AI_countGoodTiles(bool bHealthy, bool bUnworkedOnly, int iThreshold, bool bWorkerOptimization)
 {
+	// Performance: cached during a citizen evaluation (only the variant used by AI_yieldValue)
+	bool bCache = (m_iCitizenEvalDepth > 0 && bUnworkedOnly && iThreshold == 50);
+	if (bCache && m_aiGoodTilesCache[bHealthy ? 1 : 0] >= 0)
+	{
+		return m_aiGoodTilesCache[bHealthy ? 1 : 0];
+	}
+
     CvPlot* pLoopPlot;
     int iI;
     int iCount;
@@ -8603,6 +8642,10 @@ int CvCityAI::AI_countGoodTiles(bool bHealthy, bool bUnworkedOnly, int iThreshol
             }
         }
     }
+	if (bCache)
+	{
+		m_aiGoodTilesCache[bHealthy ? 1 : 0] = iCount;
+	}
     return iCount;
 }
 
@@ -8649,6 +8692,12 @@ int CvCityAI::AI_calculateTargetCulturePerTurn()
 	
 int CvCityAI::AI_countGoodSpecialists(bool bHealthy)
 {
+	// Performance: cached during a citizen evaluation
+	if (m_iCitizenEvalDepth > 0 && m_aiGoodSpecialistsCache[bHealthy ? 1 : 0] != MIN_INT)
+	{
+		return m_aiGoodSpecialistsCache[bHealthy ? 1 : 0];
+	}
+
 	CvPlayerAI& kPlayer = GET_PLAYER(getOwnerINLINE());
 	int iCount = 0;
 	for (int iI = 0; iI < GC.getNumSpecialistInfos(); iI++)
@@ -8673,8 +8722,52 @@ int CvCityAI::AI_countGoodSpecialists(bool bHealthy)
 		}
 	}
 	iCount -= getFreeSpecialist();
+
+	if (m_iCitizenEvalDepth > 0)
+	{
+		m_aiGoodSpecialistsCache[bHealthy ? 1 : 0] = iCount;
+	}
 	
 	return iCount;
+}
+
+// Performance: between begin and end, the caller only evaluates (AI_plotValue, AI_specialistValue) and does not
+// change the city, so values that only depend on the city state can be calculated once. Nesting is allowed.
+void CvCityAI::AI_beginCitizenEval()
+{
+	if (m_iCitizenEvalDepth == 0)
+	{
+		m_aiGoodTilesCache[0] = m_aiGoodTilesCache[1] = -1;
+		m_aiGoodSpecialistsCache[0] = m_aiGoodSpecialistsCache[1] = MIN_INT;
+	m_bEvalFoodValid = false;
+	}
+	m_iCitizenEvalDepth++;
+}
+
+void CvCityAI::AI_endCitizenEval()
+{
+	FAssert(m_iCitizenEvalDepth > 0);
+	m_iCitizenEvalDepth--;
+}
+
+const CitizenEvalFoodData& CvCityAI::AI_getCitizenEvalFoodData()
+{
+	if (m_iCitizenEvalDepth > 0 && m_bEvalFoodValid)
+	{
+		return m_kEvalFood;
+	}
+
+	m_kEvalFood.iFoodDifference = foodDifference(false);
+	m_kEvalFood.iFood = getFood();
+	m_kEvalFood.iGrowthThreshold = growthThreshold();
+	m_kEvalFood.iHealthLevel = goodHealth() - badHealth(/*bNoAngry*/ false, 0);
+	m_kEvalFood.iHappinessLevel = (isNoUnhappiness() ? std::max(3, m_kEvalFood.iHealthLevel + 5) : happyLevel() - unhappyLevel(0));
+	m_kEvalFood.iExtraFreeSpecialists = extraFreeSpecialists();
+	m_kEvalFood.iWorkingPopulation = getWorkingPopulation();
+	m_kEvalFood.iFoodRate = getYieldRate(YIELD_FOOD);
+	m_kEvalFood.iHurryCostModifier = getHurryCostModifier(true);
+	m_bEvalFoodValid = (m_iCitizenEvalDepth > 0);
+	return m_kEvalFood;
 }
 //0 is normal
 //higher than zero means special.
@@ -9203,6 +9296,7 @@ void CvCityAI::AI_updateWorkersNeededHere()
 			}
 		}
 	}
+	AI_beginCitizenEval();	// Performance: read-only loop, see AI_beginCitizenEval
 	for (int iI = 0; iI < NUM_CITY_PLOTS; iI++)
 	{
 		pLoopPlot = getCityIndexPlot(iI);
@@ -9269,8 +9363,9 @@ void CvCityAI::AI_updateWorkersNeededHere()
 			}
 		}
 	}
+	AI_endCitizenEval();
 	//specialists?
-	
+
 	iUnimprovedWorkedPlotCount += std::min(iUnimprovedUnworkedPlotCount, iWorkedUnimprovableCount) / 2;
 	
 	iWorkersNeeded += 2 * iUnimprovedWorkedPlotCount;
@@ -9286,7 +9381,8 @@ void CvCityAI::AI_updateWorkersNeededHere()
 		{
 			AI_addBestCitizen(true, true, &iBestPlot, &eBestSpecialist);
 		}
-		
+
+		AI_beginCitizenEval();	// Performance: read-only loop (after the temporary citizen was added)
 		for (int iI = 0; iI < NUM_CITY_PLOTS; iI++)
 		{
 			if (iI != CITY_HOME_PLOT)
@@ -9317,6 +9413,8 @@ void CvCityAI::AI_updateWorkersNeededHere()
 			}
 		}
 		
+		AI_endCitizenEval();
+
 		if (iBestPlot != -1)
 		{
 			setWorkingPlot(iBestPlot, false);

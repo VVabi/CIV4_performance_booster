@@ -3017,15 +3017,18 @@ bool CvSelectionGroup::groupAttack(int iX, int iY, int iFlags, bool& bFailedAlre
 
 						bAttack = true;
 
-						CySelectionGroup* pyGroup = new CySelectionGroup(this);
-						CyPlot* pyPlot = new CyPlot(pDestPlot);
-						CyArgsList argsList;
-						argsList.add(gDLL->getPythonIFace()->makePythonObject(pyGroup));	// pass in Selection Group class
-						argsList.add(gDLL->getPythonIFace()->makePythonObject(pyPlot));	// pass in Plot class
 						long lResult=0;
-						gDLL->getPythonIFace()->callFunction(PYGameModule, "doCombat", argsList.makeFunctionArgs(), &lResult);
-						delete pyGroup;	// python fxn must not hold on to this pointer 
-						delete pyPlot;	// python fxn must not hold on to this pointer 
+						if (!perfConstantPythonCallback("doCombat", 2, &lResult))
+						{
+							CySelectionGroup* pyGroup = new CySelectionGroup(this);
+							CyPlot* pyPlot = new CyPlot(pDestPlot);
+							CyArgsList argsList;
+							argsList.add(gDLL->getPythonIFace()->makePythonObject(pyGroup));	// pass in Selection Group class
+							argsList.add(gDLL->getPythonIFace()->makePythonObject(pyPlot));	// pass in Plot class
+							gDLL->getPythonIFace()->callFunction(PYGameModule, "doCombat", argsList.makeFunctionArgs(), &lResult);
+							delete pyGroup;	// python fxn must not hold on to this pointer
+							delete pyPlot;	// python fxn must not hold on to this pointer
+						}
 						if (lResult == 1)
 						{
 							break;
@@ -3741,12 +3744,16 @@ CvPlot* CvSelectionGroup::getPathEndTurnPlot() const
 
 bool CvSelectionGroup::generatePath( const CvPlot* pFromPlot, const CvPlot* pToPlot, int iFlags, bool bReuse, int* piPathTurns) const
 {
+#ifdef PERF_PROFILE
+	PerfProfScope kCallerScope(PerfProfCallerSample("path <- "));	// which function requested the search
+#endif
 	PROFILE("CvSelectionGroup::generatePath()")
 
 	FAStarNode* pNode;
 	bool bSuccess;
 
 	gDLL->getFAStarIFace()->SetData(&GC.getPathFinder(), this);
+	startPathSearch(this);	// Performance: fresh per-search caches in pathCost/pathValid/pathAdd
 
 	bSuccess = gDLL->getFAStarIFace()->GeneratePath(&GC.getPathFinder(), pFromPlot->getX_INLINE(), pFromPlot->getY_INLINE(), pToPlot->getX_INLINE(), pToPlot->getY_INLINE(), false, iFlags, bReuse);
 

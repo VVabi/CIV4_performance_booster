@@ -82,11 +82,14 @@ bool CvUnitAI::AI_update()
 	long lResult=0;
 	{
 		PROFILE("Python: AI_unitUpdate");
-		CyUnit* pyUnit = new CyUnit(this);
-		CyArgsList argsList;
-		argsList.add(gDLL->getPythonIFace()->makePythonObject(pyUnit));	// pass in unit class
-		gDLL->getPythonIFace()->callFunction(PYGameModule, "AI_unitUpdate", argsList.makeFunctionArgs(), &lResult);
-		delete pyUnit;	// python fxn must not hold on to this pointer
+		if (!perfConstantPythonCallback("AI_unitUpdate", 1, &lResult))
+		{
+			CyUnit* pyUnit = new CyUnit(this);
+			CyArgsList argsList;
+			argsList.add(gDLL->getPythonIFace()->makePythonObject(pyUnit));	// pass in unit class
+			gDLL->getPythonIFace()->callFunction(PYGameModule, "AI_unitUpdate", argsList.makeFunctionArgs(), &lResult);
+			delete pyUnit;	// python fxn must not hold on to this pointer
+		}
 	}
 	if (lResult == 1)
 	{
@@ -446,6 +449,98 @@ bool CvUnitAI::AI_follow()
 
 // XXX what if a unit gets stuck b/c of it's UnitAIType???
 // XXX is this function costing us a lot? (it's recursive...)
+// Performance: same as CvUnit::upgradeAvailable(), for any civilization (it only depends on the XML data)
+static bool upgradeAvailableForCiv(CivilizationTypes eCiv, UnitTypes eFromUnit, UnitClassTypes eToUnitClass, int iCount)
+{
+	int numUnitClassInfos = GC.getNumUnitClassInfos();
+
+	if (iCount > numUnitClassInfos)
+	{
+		return false;
+	}
+
+	CvUnitInfo& fromUnitInfo = GC.getUnitInfo(eFromUnit);
+
+	if (fromUnitInfo.getUpgradeUnitClass(eToUnitClass))
+	{
+		return true;
+	}
+
+	for (int iI = 0; iI < numUnitClassInfos; iI++)
+	{
+		if (fromUnitInfo.getUpgradeUnitClass(iI))
+		{
+			UnitTypes eLoopUnit = ((UnitTypes)(GC.getCivilizationInfo(eCiv).getCivilizationUnits(iI)));
+
+			if (eLoopUnit != NO_UNIT)
+			{
+				if (upgradeAvailableForCiv(eCiv, eLoopUnit, eToUnitClass, (iCount + 1)))
+				{
+					return true;
+				}
+			}
+		}
+	}
+
+	return false;
+}
+
+// Performance: the unit types (ascending) a unit of type eUnit of civilization eCiv could ever upgrade to, i.e.
+// those for which the XML-only checks at the start of canUpgrade() / getUpgradeCity() succeed. Calculated once.
+static const std::vector<int>& getUpgradeTargets(CivilizationTypes eCiv, UnitTypes eUnit)
+{
+	static std::vector<std::vector<int> > s_aaiTargets;
+	static std::vector<bool> s_abKnown;
+
+	int iSize = GC.getNumCivilizationInfos() * GC.getNumUnitInfos();
+	if ((int)s_abKnown.size() != iSize)
+	{
+		s_aaiTargets.assign(iSize, std::vector<int>());
+		s_abKnown.assign(iSize, false);
+	}
+
+	int iIndex = eCiv * GC.getNumUnitInfos() + eUnit;
+	if (!s_abKnown[iIndex])
+	{
+		for (int iI = 0; iI < GC.getNumUnitInfos(); iI++)
+		{
+			UnitClassTypes eClass = (UnitClassTypes)GC.getUnitInfo((UnitTypes)iI).getUnitClassType();
+			if (GC.getCivilizationInfo(eCiv).getCivilizationUnits(eClass) == iI &&
+				upgradeAvailableForCiv(eCiv, eUnit, eClass, 0))
+			{
+				s_aaiTargets[iIndex].push_back(iI);
+			}
+		}
+		s_abKnown[iIndex] = true;
+	}
+	return s_aaiTargets[iIndex];
+}
+
+// Performance: the tech requirements of CvPlayer::canTrain()
+static bool teamHasUnitTechs(TeamTypes eTeam, UnitTypes eUnit)
+{
+	CvUnitInfo& kUnit = GC.getUnitInfo(eUnit);
+	CvTeam& kTeam = GET_TEAM(eTeam);
+
+	if (!kTeam.isHasTech((TechTypes)kUnit.getPrereqAndTech()))
+	{
+		return false;
+	}
+
+	for (int iI = 0; iI < GC.getNUM_UNIT_AND_TECH_PREREQS(); iI++)
+	{
+		if (kUnit.getPrereqAndTechs(iI) != NO_TECH)
+		{
+			if (!kTeam.isHasTech((TechTypes)kUnit.getPrereqAndTechs(iI)))
+			{
+				return false;
+			}
+		}
+	}
+
+	return true;
+}
+
 void CvUnitAI::AI_upgrade()
 {
 	PROFILE_FUNC();
@@ -453,25 +548,98 @@ void CvUnitAI::AI_upgrade()
 	FAssertMsg(!isHuman(), "isHuman did not return false as expected");
 	FAssertMsg(AI_getUnitAIType() != NO_UNITAI, "AI_getUnitAIType() is not expected to be equal with NO_UNITAI");
 
+	// Performance: cheap exits before valuing every unit type. canUpgrade() fails for every
+	// type in these cases anyway, and the random number below is only drawn when canUpgrade() succeeds.
+	// Only taken when the owner's AI strategies are already computed for this turn: AI_unitValue() asks for
+	// them, and they are computed on the first request of each turn, so skipping that first request would
+	// compute them later, from a different game state (this changed AI war decisions in tests).
+	if (GET_PLAYER(getOwnerINLINE()).AI_isStrategyHashCached())
+	{
+		if (!isReadyForUpgrade())
+		{
+			return;
+		}
+
+		bool bAnyUpgrade = false;
+		for (int iClass = 0; iClass < GC.getNumUnitClassInfos(); iClass++)
+		{
+			if (GC.getUnitInfo(getUnitType()).getUpgradeUnitClass(iClass))
+			{
+				bAnyUpgrade = true;
+				break;
+			}
+		}
+		if (!bAnyUpgrade)
+		{
+			return;
+		}
+	}
+
 	CvPlayerAI& kPlayer = GET_PLAYER(getOwnerINLINE());
 	UnitAITypes eUnitAI = AI_getUnitAIType();
 	CvArea* pArea = area();
 
-	int iCurrentValue = kPlayer.AI_unitValue(getUnitType(), eUnitAI, pArea);
-	
+	// Performance: with the strategies already cached for this turn, AI_unitValue() and canUpgrade() have no
+	// side effects, so the order of the checks does not matter: a unit type is only valued if the unit can
+	// actually upgrade to it, and the unit's own value is only calculated when first needed. The random number
+	// is still drawn under exactly the same conditions. Without cached strategies the original order is kept,
+	// because AI_unitValue() may be the first to request them (see above).
+	// The new order calls canUpgrade() for more unit types than the original, so it is also only used when the
+	// Python callbacks canUpgrade() can reach cannot notice: getUpgradePriceOverride (upgradePrice) only returns a
+	// constant (then it is not called at all, see perfConstantPythonCallback) and the canTrain / cannotTrain
+	// callbacks (getUpgradeCity -> CvCity::canTrain) are off. A mod with such callbacks gets the original order.
+	long lUpgradePriceOverride;
+	bool bCheckUpgradeFirst = kPlayer.AI_isStrategyHashCached() &&
+		!GC.getUSE_CAN_TRAIN_CALLBACK() && !GC.getUSE_CANNOT_TRAIN_CALLBACK() &&
+		perfConstantPythonCallback("getUpgradePriceOverride", 3, &lUpgradePriceOverride);
+	int iCurrentValue = 0;
+	bool bCurrentValueKnown = false;
+	if (!bCheckUpgradeFirst)
+	{
+		iCurrentValue = kPlayer.AI_unitValue(getUnitType(), eUnitAI, pArea);
+		bCurrentValueKnown = true;
+	}
+
 	for (int iPass = 0; iPass < 2; iPass++)
 	{
 		int iBestValue = 0;
 		UnitTypes eBestUnit = NO_UNIT;
 
-		for (int iI = 0; iI < GC.getNumUnitInfos(); iI++)
+		// with cached strategies, only the unit types this unit could ever upgrade to are visited (same order)
+		const std::vector<int>* paiTargets = bCheckUpgradeFirst ? &getUpgradeTargets(kPlayer.getCivilizationType(), getUnitType()) : NULL;
+		int iNumCandidates = bCheckUpgradeFirst ? (int)paiTargets->size() : GC.getNumUnitInfos();
+
+		for (int iCandidate = 0; iCandidate < iNumCandidates; iCandidate++)
 		{
+			int iI = bCheckUpgradeFirst ? (*paiTargets)[iCandidate] : iCandidate;
+
 			if ((iPass > 0) || GC.getUnitInfo((UnitTypes)iI).getUnitAIType(AI_getUnitAIType()))
 			{
+				if (bCheckUpgradeFirst)
+				{
+					// cheap necessary condition first: canUpgrade() needs a team city that can train the unit type,
+					// which needs the team to know its techs (unless Python's canTrain callback may allow it anyway).
+					// canUpgrade() itself starts with the upgrade price, which calls into Python.
+					if (!GC.getUSE_CAN_TRAIN_CALLBACK() && !teamHasUnitTechs(getTeam(), (UnitTypes)iI))
+					{
+						continue;
+					}
+					if (!canUpgrade((UnitTypes)iI))
+					{
+						continue;
+					}
+					if (!bCurrentValueKnown)
+					{
+						iCurrentValue = kPlayer.AI_unitValue(getUnitType(), eUnitAI, pArea);
+						bCurrentValueKnown = true;
+					}
+				}
+
 				int iNewValue = kPlayer.AI_unitValue(((UnitTypes)iI), eUnitAI, pArea);
 				if ((iPass == 0 || iNewValue > 0) && iNewValue > iCurrentValue)
 				{
-					if (canUpgrade((UnitTypes)iI))
+					// with cached strategies canUpgrade() already succeeded above, and nothing since changed the game
+					if (bCheckUpgradeFirst || canUpgrade((UnitTypes)iI))
 					{
 						int iValue = (1 + GC.getGameINLINE().getSorenRandNum(10000, "AI Upgrade"));
 
@@ -10243,7 +10411,6 @@ bool CvUnitAI::AI_explore()
 
 	for (iI = 0; iI < GC.getMapINLINE().numPlotsINLINE(); iI++)
 	{
-		PROFILE("AI_explore 1");
 
 		pLoopPlot = GC.getMapINLINE().plotByIndexINLINE(iI);
 
@@ -10360,7 +10527,6 @@ bool CvUnitAI::AI_exploreRange(int iRange)
 	{
 		for (iDY = -(iSearchRange); iDY <= iSearchRange; iDY++)
 		{
-			PROFILE("AI_exploreRange 1");
 
 			pLoopPlot	= plotXY(getX_INLINE(), getY_INLINE(), iDX, iDY);
 
@@ -16451,7 +16617,6 @@ int CvUnitAI::AI_searchRange(int iRange)
 // XXX at some point test the game with and without this function...
 bool CvUnitAI::AI_plotValid(CvPlot* pPlot)
 {
-	PROFILE_FUNC();
 
 	if (m_pUnitInfo->isNoRevealMap() && willRevealByMove(pPlot))
 	{

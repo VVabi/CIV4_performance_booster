@@ -1219,9 +1219,337 @@ int changeIrrigated(FAStarNode* parent, FAStarNode* node, int data, const void* 
 }
 
 
+// Performance: AI_getPlotDanger results cached for the duration of one path search.
+// The path finder asks for the danger of the same plot many times (once per neighbouring node), and nothing
+// in the game changes while a search runs, so the cached value is always exact. pathDestValid is called once
+// at the start of every search and starts a new cache generation.
+static int s_iPathSearchId = 0;
+static std::vector<int> s_aiPathDangerStamp;
+static std::vector<int> s_aiPathDangerValue;
+
+static int getPathPlotDanger(PlayerTypes ePlayer, CvPlot* pPlot)
+{
+	int iIndex = GC.getMapINLINE().plotNumINLINE(pPlot->getX_INLINE(), pPlot->getY_INLINE());
+	if ((int)s_aiPathDangerStamp.size() != GC.getMapINLINE().numPlotsINLINE())
+	{
+		s_aiPathDangerStamp.assign(GC.getMapINLINE().numPlotsINLINE(), -1);
+		s_aiPathDangerValue.assign(GC.getMapINLINE().numPlotsINLINE(), 0);
+	}
+	// the stamp combines search id and player, so a stale entry can never match
+	int iStamp = s_iPathSearchId * MAX_PLAYERS + (int)ePlayer;
+	if (s_aiPathDangerStamp[iIndex] != iStamp)
+	{
+		s_aiPathDangerStamp[iIndex] = iStamp;
+		s_aiPathDangerValue[iIndex] = GET_PLAYER(ePlayer).AI_getPlotDanger(pPlot);
+	}
+	return s_aiPathDangerValue[iIndex];
+}
+
+// Performance: more per-search caches for pathValid. The selection group and the game do not change during a
+// search, so these group properties and per-plot move checks are fixed; they are only used while pathValid
+// works for the group that started the search (pathDestValid), otherwise everything is calculated as before.
+static const void* s_pPathGroup = NULL;
+static int s_iPathGroupFlagsId = -1;
+static IDInfo s_kPathGroupHeadUnit;		// head unit of the group when the values below were calculated
+static bool s_bPathGroupCanFight = false;
+static bool s_bPathGroupAlwaysInvisible = false;
+static int s_iPathGroupNumUnits = 0;
+static std::vector<int> s_aiPathMoveStamp;
+static std::vector<char> s_abPathMoveValue;
+
+// Performance: units of a multi-unit group that cannot be told apart by pathCost (see getPathUnitSignature) give
+// the same step cost, moves and final cost, so pathCost only evaluates the first unit of each such class (it can
+// only ever change the worst value when it is first seen: after a unit was processed, the worst value only gets
+// lower, so the same unit again never passes the tests). s_aiPathUnitClass[i] is the index of the first unit with
+// the same signature as unit i, in the order of the group's unit list; calculated once per search.
+static std::vector<int> s_aiPathUnitClass;
+static std::vector<int> s_aiPathUnitSignature;
+
+// Everything pathCost (and CvPlot::movementCost, CvPlot::isValidRoute, CvUnit::isEnemy, CvPlot::isVisibleEnemyDefender
+// and the other functions it calls) reads from a unit: the unit type (unit info: domain, flat/ignore terrain cost,
+// defensive bonus, only defensive, always hostile, move all terrain), the owner (team, human), the moves (base
+// moves include the promotion and team extras), the move discount, the base combat strength, river, enemy route,
+// and the double move flags of hills, every terrain and every feature.
+static int getPathUnitSignatureSize()
+{
+	return 8 + GC.getNumTerrainInfos() + GC.getNumFeatureInfos();
+}
+
+static void getPathUnitSignature(const CvUnit* pUnit, int* piSignature)
+{
+	int iN = 0;
+	piSignature[iN++] = (int)pUnit->getUnitType();
+	piSignature[iN++] = (int)pUnit->getOwnerINLINE();
+	piSignature[iN++] = pUnit->baseMoves();
+	piSignature[iN++] = pUnit->getExtraMoveDiscount();
+	piSignature[iN++] = pUnit->baseCombatStr();
+	piSignature[iN++] = pUnit->isRiver() ? 1 : 0;
+	piSignature[iN++] = pUnit->isEnemyRoute() ? 1 : 0;
+	piSignature[iN++] = pUnit->isHillsDoubleMove() ? 1 : 0;
+	for (int iI = 0; iI < GC.getNumTerrainInfos(); iI++)
+	{
+		piSignature[iN++] = pUnit->isTerrainDoubleMove((TerrainTypes)iI) ? 1 : 0;
+	}
+	for (int iI = 0; iI < GC.getNumFeatureInfos(); iI++)
+	{
+		piSignature[iN++] = pUnit->isFeatureDoubleMove((FeatureTypes)iI) ? 1 : 0;
+	}
+}
+
+static void updatePathUnitClasses(CvSelectionGroup* pSelectionGroup)
+{
+	s_aiPathUnitClass.clear();
+
+	int iNumUnits = pSelectionGroup->getNumUnits();
+	if (iNumUnits <= 1)
+	{
+		return;
+	}
+
+	int iSize = getPathUnitSignatureSize();
+	s_aiPathUnitSignature.resize(iNumUnits * iSize);
+
+	int iIndex = 0;
+	for (CLLNode<IDInfo>* pUnitNode = pSelectionGroup->headUnitNode(); pUnitNode != NULL; pUnitNode = pSelectionGroup->nextUnitNode(pUnitNode))
+	{
+		CvUnit* pLoopUnit = ::getUnit(pUnitNode->m_data);
+		if (pLoopUnit == NULL || iIndex >= iNumUnits)
+		{
+			// unexpected: do not use classes for this search
+			s_aiPathUnitClass.clear();
+			return;
+		}
+
+		int* piSignature = &s_aiPathUnitSignature[iIndex * iSize];
+		getPathUnitSignature(pLoopUnit, piSignature);
+
+		int iClass = iIndex;
+		for (int iPrev = 0; iPrev < iIndex; iPrev++)
+		{
+			if (s_aiPathUnitClass[iPrev] == iPrev && memcmp(&s_aiPathUnitSignature[iPrev * iSize], piSignature, iSize * sizeof(int)) == 0)
+			{
+				iClass = iPrev;
+				break;
+			}
+		}
+		s_aiPathUnitClass.push_back(iClass);
+		iIndex++;
+	}
+
+	if (iIndex != iNumUnits)
+	{
+		s_aiPathUnitClass.clear();
+	}
+}
+
+// Performance: what pathCost reads from a unit, calculated once per search for the group that started it (none of
+// it changes during a search) instead of on every call (every call is for one step of the search)
+struct PathUnitInfo
+{
+	CvUnit* pUnit;
+	int iMaxMoves;
+	TeamTypes eTeam;
+	bool bCanFight;
+	bool bCanAttack;
+	bool bNoDefensiveBonus;
+	bool bRiver;
+};
+
+static void fillPathUnitInfo(PathUnitInfo& kInfo, CvUnit* pUnit)
+{
+	kInfo.pUnit = pUnit;
+	kInfo.iMaxMoves = pUnit->maxMoves();
+	kInfo.eTeam = pUnit->getTeam();
+	kInfo.bCanFight = pUnit->canFight();
+	kInfo.bCanAttack = pUnit->canAttack();
+	kInfo.bNoDefensiveBonus = pUnit->noDefensiveBonus();
+	kInfo.bRiver = pUnit->isRiver();
+}
+
+// the units pathCost evaluates: the first unit of each class (see s_aiPathUnitClass), in the order of the group
+static std::vector<PathUnitInfo> s_aPathUnits;
+// properties of the group itself, used by pathValid and pathCost (each of them looks up the group's head unit)
+static CvPlot* s_pPathGroupPlot = NULL;
+static DomainTypes s_ePathGroupDomain = NO_DOMAIN;
+static TeamTypes s_ePathGroupHeadTeam = NO_TEAM;
+static PlayerTypes s_ePathGroupHeadOwner = NO_PLAYER;
+static bool s_bPathGroupAIControlled = false;
+
+static void newPathCacheGeneration();
+
+static void updatePathGroupFlags(CvSelectionGroup* pSelectionGroup)
+{
+	// Performance (safety net): the per-search values are only valid for the group as it was when they were
+	// calculated. If its units changed without a new search being started (a search the exe started without
+	// pathDestValid), all per-search caches are dropped. Two integer comparisons per call, no unit lookup.
+	if (s_iPathGroupFlagsId == s_iPathSearchId)
+	{
+		const CLLNode<IDInfo>* pHeadNode = pSelectionGroup->headUnitNode();
+		if (pSelectionGroup->getNumUnits() != s_iPathGroupNumUnits || pHeadNode == NULL || !(pHeadNode->m_data == s_kPathGroupHeadUnit))
+		{
+			newPathCacheGeneration();
+		}
+	}
+
+	if (s_iPathGroupFlagsId != s_iPathSearchId)
+	{
+		s_iPathGroupFlagsId = s_iPathSearchId;
+		const CLLNode<IDInfo>* pHeadNode = pSelectionGroup->headUnitNode();
+		s_kPathGroupHeadUnit = (pHeadNode != NULL) ? pHeadNode->m_data : IDInfo();
+		s_bPathGroupCanFight = pSelectionGroup->canFight();
+		s_bPathGroupAlwaysInvisible = pSelectionGroup->alwaysInvisible();
+		s_iPathGroupNumUnits = pSelectionGroup->getNumUnits();
+		s_pPathGroupPlot = pSelectionGroup->plot();
+		s_ePathGroupDomain = pSelectionGroup->getDomainType();
+		s_ePathGroupHeadTeam = pSelectionGroup->getHeadTeam();
+		s_ePathGroupHeadOwner = pSelectionGroup->getHeadOwner();
+		s_bPathGroupAIControlled = pSelectionGroup->AI_isControlled();
+		updatePathUnitClasses(pSelectionGroup);
+
+		s_aPathUnits.clear();
+		const bool bUseClasses = (s_iPathGroupNumUnits > 1 && (int)s_aiPathUnitClass.size() == s_iPathGroupNumUnits);
+		int iUnitIndex = -1;
+		for (CLLNode<IDInfo>* pUnitNode = pSelectionGroup->headUnitNode(); pUnitNode != NULL; pUnitNode = pSelectionGroup->nextUnitNode(pUnitNode))
+		{
+			CvUnit* pLoopUnit = ::getUnit(pUnitNode->m_data);
+			iUnitIndex++;
+			if (bUseClasses && s_aiPathUnitClass[iUnitIndex] != iUnitIndex)
+			{
+				continue;
+			}
+			PathUnitInfo kInfo;
+			fillPathUnitInfo(kInfo, pLoopUnit);
+			s_aPathUnits.push_back(kInfo);
+		}
+	}
+}
+
+// pSelectionGroup->canMoveOrAttackInto(pPlot) if bThroughEnemy, else pSelectionGroup->canMoveThrough(pPlot)
+static bool getPathCanMove(CvSelectionGroup* pSelectionGroup, CvPlot* pPlot, bool bThroughEnemy)
+{
+	if (pSelectionGroup != s_pPathGroup)
+	{
+		return bThroughEnemy ? pSelectionGroup->canMoveOrAttackInto(pPlot) : pSelectionGroup->canMoveThrough(pPlot);
+	}
+	int iIndex = GC.getMapINLINE().plotNumINLINE(pPlot->getX_INLINE(), pPlot->getY_INLINE());
+	if ((int)s_aiPathMoveStamp.size() != GC.getMapINLINE().numPlotsINLINE())
+	{
+		s_aiPathMoveStamp.assign(GC.getMapINLINE().numPlotsINLINE(), -1);
+		s_abPathMoveValue.assign(GC.getMapINLINE().numPlotsINLINE(), 0);
+	}
+	// the stamp combines search id and check type, so a stale entry can never match
+	int iStamp = s_iPathSearchId * 2 + (bThroughEnemy ? 1 : 0);
+	if (s_aiPathMoveStamp[iIndex] != iStamp)
+	{
+		s_aiPathMoveStamp[iIndex] = iStamp;
+		s_abPathMoveValue[iIndex] = (bThroughEnemy ? pSelectionGroup->canMoveOrAttackInto(pPlot) : pSelectionGroup->canMoveThrough(pPlot)) ? 1 : 0;
+	}
+	return (s_abPathMoveValue[iIndex] != 0);
+}
+
+// Performance: pathCost's movement cost of a step for a single-unit group (it only depends on the unit and the
+// two plots) and the defense modifier of a plot for the group's team, cached per search
+static std::vector<int> s_aiPathStepCostStamp;
+static std::vector<int> s_aiPathStepCostValue;
+static std::vector<int> s_aiPathDefenseStamp;
+static std::vector<int> s_aiPathDefenseValue;
+
+static int getPathStepCost(const CvUnit* pUnit, const CvPlot* pFromPlot, const CvPlot* pToPlot)
+{
+	DirectionTypes eDirection = directionXY(pFromPlot, pToPlot);
+	if (eDirection == NO_DIRECTION)
+	{
+		return pToPlot->movementCost(pUnit, pFromPlot);
+	}
+	int iSize = GC.getMapINLINE().numPlotsINLINE() * NUM_DIRECTION_TYPES;
+	if ((int)s_aiPathStepCostStamp.size() != iSize)
+	{
+		s_aiPathStepCostStamp.assign(iSize, -1);
+		s_aiPathStepCostValue.assign(iSize, 0);
+	}
+	int iIndex = GC.getMapINLINE().plotNumINLINE(pToPlot->getX_INLINE(), pToPlot->getY_INLINE()) * NUM_DIRECTION_TYPES + eDirection;
+	if (s_aiPathStepCostStamp[iIndex] != s_iPathSearchId)
+	{
+		s_aiPathStepCostStamp[iIndex] = s_iPathSearchId;
+		s_aiPathStepCostValue[iIndex] = pToPlot->movementCost(pUnit, pFromPlot);
+	}
+	return s_aiPathStepCostValue[iIndex];
+}
+
+static int getPathDefenseModifier(const CvPlot* pPlot, TeamTypes eTeam)
+{
+	int iIndex = GC.getMapINLINE().plotNumINLINE(pPlot->getX_INLINE(), pPlot->getY_INLINE());
+	if ((int)s_aiPathDefenseStamp.size() != GC.getMapINLINE().numPlotsINLINE())
+	{
+		s_aiPathDefenseStamp.assign(GC.getMapINLINE().numPlotsINLINE(), -1);
+		s_aiPathDefenseValue.assign(GC.getMapINLINE().numPlotsINLINE(), 0);
+	}
+	// the stamp combines search id and team, so a stale entry can never match
+	int iStamp = s_iPathSearchId * MAX_TEAMS + (int)eTeam;
+	if (s_aiPathDefenseStamp[iIndex] != iStamp)
+	{
+		s_aiPathDefenseStamp[iIndex] = iStamp;
+		s_aiPathDefenseValue[iIndex] = pPlot->defenseModifier(eTeam, false);
+	}
+	return s_aiPathDefenseValue[iIndex];
+}
+
+// Timing build only: profiler scopes for the A* callbacks pathCost, pathValid and pathAdd. They run inside the
+// exe's GeneratePath, so without them their time is booked as self time of CvSelectionGroup::generatePath().
+// They are called for every expanded node (millions of times per turn), so the scopes distort the rest of the
+// profile (and the total time): use them to split generatePath's time, then set this to 0 for undistorted timings.
+// pathHeuristic is never marked (a one-line function, the scope would cost more than the function).
+// 0 = off, 1 = the callbacks, 2 = also sections inside pathCost and pathValid (even more overhead: compare the
+// shares of the sections, not their absolute times)
+#define PERF_PROFILE_PATH_CALLBACKS 0
+#if PERF_PROFILE_PATH_CALLBACKS >= 1
+#define PROFILE_PATH_CALLBACK() PROFILE_FUNC()
+#else
+#define PROFILE_PATH_CALLBACK()
+#endif
+#if PERF_PROFILE_PATH_CALLBACKS >= 2
+#define PROFILE_PATH_SECTION(name) PROFILE(name)
+#else
+#define PROFILE_PATH_SECTION(name)
+#endif
+
+// new cache generation: every per-search cache entry of an older generation is invalid (stamps are only compared
+// for equality; the counter is reset, with all caches, before the stamps could overflow)
+static void newPathCacheGeneration()
+{
+	s_iPathSearchId++;
+	if (s_iPathSearchId > 20000000)
+	{
+		s_iPathSearchId = 0;
+		s_aiPathDangerStamp.clear();
+		s_aiPathDangerValue.clear();
+		s_aiPathMoveStamp.clear();
+		s_abPathMoveValue.clear();
+		s_iPathGroupFlagsId = -1;
+		s_aiPathStepCostStamp.clear();
+		s_aiPathStepCostValue.clear();
+		s_aiPathDefenseStamp.clear();
+		s_aiPathDefenseValue.clear();
+	}
+}
+
+// Performance: starts a new path search for the per-search caches. Called by the DLL right before each
+// GeneratePath it starts (CvSelectionGroup::generatePath, the interface path in CvGameInterface), so those
+// searches never depend on the exe's call order inside GeneratePath, and again by pathDestValid for the searches
+// the exe starts by itself (e.g. the path shown under the mouse). Calling it twice for one search is harmless:
+// nothing is cached in between.
+void startPathSearch(const void* pGroup)
+{
+	newPathCacheGeneration();
+	s_pPathGroup = pGroup;
+}
+
 int pathDestValid(int iToX, int iToY, const void* pointer, FAStar* finder)
 {
 	PROFILE_FUNC();
+
+	// new path search: new cache generation (see startPathSearch)
+	startPathSearch(pointer);
 
 	CLLNode<IDInfo>* pUnitNode1;
 	CLLNode<IDInfo>* pUnitNode2;
@@ -1255,7 +1583,7 @@ int pathDestValid(int iToX, int iToY, const void* pointer, FAStar* finder)
 		{
 			if (!(pSelectionGroup->canFight()) && !(pSelectionGroup->alwaysInvisible()))
 			{
-				if (GET_PLAYER(pSelectionGroup->getHeadOwner()).AI_getPlotDanger(pToPlot) > 0)
+				if (getPathPlotDanger(pSelectionGroup->getHeadOwner(), pToPlot) > 0)
 				{
 					return FALSE;
 				}
@@ -1338,19 +1666,194 @@ int pathHeuristic(int iFromX, int iFromY, int iToX, int iToY)
 }
 
 
+// Timing build only, plain counters (no timers, so almost no overhead): how many units the groups of the pathCost
+// calls have and how many of the step cost evaluations bypass the per-search cache (multi-unit groups and groups
+// other than the one that started the search). Cumulative line in Logs\PathStepCounters.log every 2M calls.
+#define PERF_PATH_COUNTERS 0
+#if defined(PERF_PROFILE) && PERF_PATH_COUNTERS
+static __int64 s_iPathUnitEvalsSkipped = 0;	// unit evaluations skipped because an equivalent unit was already evaluated
+
+static void perfPathCountCall(CvSelectionGroup* pGroup, bool bCached)
+{
+	static __int64 s_iCalls = 0;
+	static __int64 s_iUnits = 0;
+	static __int64 s_iSingleCached = 0;
+	static __int64 s_iMultiCached = 0;
+	static __int64 s_iMultiCachedUnits = 0;
+	static __int64 s_iOtherGroup = 0;
+	static __int64 s_iOtherGroupUnits = 0;
+	static __int64 s_aiSize[6] = { 0, 0, 0, 0, 0, 0 };	// groups of 1, 2, 3, 4-5, 6-10, 11+ units
+	static __int64 s_iMultiGroups = 0;
+	static __int64 s_iMultiAllSameType = 0;
+
+	int iNum = pGroup->getNumUnits();
+	s_iCalls++;
+	s_iUnits += iNum;
+	s_aiSize[(iNum <= 3) ? std::max(0, iNum - 1) : ((iNum <= 5) ? 3 : ((iNum <= 10) ? 4 : 5))]++;
+	if (bCached)
+	{
+		if (iNum == 1)
+		{
+			s_iSingleCached++;
+		}
+		else
+		{
+			s_iMultiCached++;
+			s_iMultiCachedUnits += iNum;
+		}
+	}
+	else
+	{
+		s_iOtherGroup++;
+		s_iOtherGroupUnits += iNum;
+	}
+	if (iNum > 1)
+	{
+		s_iMultiGroups++;
+		CvUnit* pHead = pGroup->getHeadUnit();
+		bool bAllSame = (pHead != NULL);
+		for (CLLNode<IDInfo>* pNode = pGroup->headUnitNode(); pNode != NULL && bAllSame; pNode = pGroup->nextUnitNode(pNode))
+		{
+			CvUnit* pUnit = ::getUnit(pNode->m_data);
+			if (pUnit == NULL || pUnit->getUnitType() != pHead->getUnitType())
+			{
+				bAllSame = false;
+			}
+		}
+		if (bAllSame)
+		{
+			s_iMultiAllSameType++;
+		}
+	}
+
+	if (s_iCalls % 2000000 == 0)
+	{
+		CvString szLine;
+		szLine.Format("turn %d: calls %I64d, unit evaluations %I64d; group size 1:%I64d 2:%I64d 3:%I64d 4-5:%I64d 6-10:%I64d 11+:%I64d; cache used: single-unit %I64d calls, multi-unit %I64d calls (%I64d unit evaluations, %I64d groups all of one unit type); other group (no cache): %I64d calls (%I64d unit evaluations); unit evaluations skipped as equivalent: %I64d",
+			GC.getGameINLINE().getGameTurn(), s_iCalls, s_iUnits, s_aiSize[0], s_aiSize[1], s_aiSize[2], s_aiSize[3], s_aiSize[4], s_aiSize[5],
+			s_iSingleCached, s_iMultiCached, s_iMultiCachedUnits, s_iMultiAllSameType, s_iOtherGroup, s_iOtherGroupUnits, s_iPathUnitEvalsSkipped);
+		gDLL->logMsg("PathStepCounters.log", szLine.c_str(), false, false);
+	}
+}
+#endif
+
+// Performance: the evaluation of one unit in pathCost (the body of the loop over the group's units). The unit
+// values are passed in (kUnit): for the group that started the search they are calculated once per search, see
+// updatePathGroupFlags.
+static void pathCostUnit(const PathUnitInfo& kUnit, FAStarNode* parent, CvPlot* pFromPlot, CvPlot* pToPlot, FAStar* finder, bool bAIControlled, bool bPathCache, int& iWorstCost, int& iWorstMovesLeft, int& iWorstMax)
+{
+	int iCost;
+	int iMovesLeft;
+	int iMax;
+
+	FAssertMsg(kUnit.pUnit->getDomainType() != DOMAIN_AIR, "pLoopUnit->getDomainType() is not expected to be equal with DOMAIN_AIR");
+
+	if (parent->m_iData1 > 0)
+	{
+		iMax = parent->m_iData1;
+	}
+	else
+	{
+		iMax = kUnit.iMaxMoves;
+	}
+
+	{
+		PROFILE_PATH_SECTION("pathCost: step cost");
+		iCost = (bPathCache && s_iPathGroupNumUnits == 1) ? getPathStepCost(kUnit.pUnit, pFromPlot, pToPlot) : pToPlot->movementCost(kUnit.pUnit, pFromPlot);
+	}
+
+	iMovesLeft = std::max(0, (iMax - iCost));
+
+	if (iMovesLeft <= iWorstMovesLeft)
+	{
+		if ((iMovesLeft < iWorstMovesLeft) || (iMax <= iWorstMax))
+		{
+			if (iMovesLeft == 0)
+			{
+				iCost = (PATH_MOVEMENT_WEIGHT * iMax);
+
+				if (pToPlot->getTeam() != kUnit.eTeam)
+				{
+					iCost += PATH_TERRITORY_WEIGHT;
+				}
+
+				// Damage caused by features (mods)
+				if (0 != GC.getPATH_DAMAGE_WEIGHT())
+				{
+					if (pToPlot->getFeatureType() != NO_FEATURE)
+					{
+						iCost += (GC.getPATH_DAMAGE_WEIGHT() * std::max(0, GC.getFeatureInfo(pToPlot->getFeatureType()).getTurnDamage())) / GC.getMAX_HIT_POINTS();
+					}
+
+					if (pToPlot->getExtraMovePathCost() > 0)
+					{
+						iCost += (PATH_MOVEMENT_WEIGHT * pToPlot->getExtraMovePathCost());
+					}
+				}
+			}
+			else
+			{
+				iCost = (PATH_MOVEMENT_WEIGHT * iCost);
+			}
+
+			if (kUnit.bCanFight)
+			{
+				if (iMovesLeft == 0)
+				{
+					PROFILE_PATH_SECTION("pathCost: defense modifier");
+					iCost += (PATH_DEFENSE_WEIGHT * std::max(0, (200 - ((kUnit.bNoDefensiveBonus) ? 0 : (bPathCache ? getPathDefenseModifier(pToPlot, kUnit.eTeam) : pToPlot->defenseModifier(kUnit.eTeam, false))))));
+				}
+
+				if (bAIControlled)
+				{
+					PROFILE_PATH_SECTION("pathCost: attack checks");
+					if (kUnit.bCanAttack)
+					{
+						if (gDLL->getFAStarIFace()->IsPathDest(finder, pToPlot->getX_INLINE(), pToPlot->getY_INLINE()))
+						{
+							if (pToPlot->isVisibleEnemyDefender(kUnit.pUnit))
+							{
+								iCost += (PATH_DEFENSE_WEIGHT * std::max(0, (200 - ((kUnit.bNoDefensiveBonus) ? 0 : pFromPlot->defenseModifier(kUnit.eTeam, false)))));
+
+								if (!(pFromPlot->isCity()))
+								{
+									iCost += PATH_CITY_WEIGHT;
+								}
+
+								if (pFromPlot->isRiverCrossing(directionXY(pFromPlot, pToPlot)))
+								{
+									if (!kUnit.bRiver)
+									{
+										iCost += (PATH_RIVER_WEIGHT * -(GC.getRIVER_ATTACK_MODIFIER()));
+										iCost += (PATH_MOVEMENT_WEIGHT * iMovesLeft);
+									}
+								}
+							}
+						}
+					}
+				}
+			}
+
+			if (iCost < iWorstCost)
+			{
+				iWorstCost = iCost;
+				iWorstMovesLeft = iMovesLeft;
+				iWorstMax = iMax;
+			}
+		}
+	}
+}
+
 int pathCost(FAStarNode* parent, FAStarNode* node, int data, const void* pointer, FAStar* finder)
 {
-	CLLNode<IDInfo>* pUnitNode;
+	PROFILE_PATH_CALLBACK();
+
 	CvSelectionGroup* pSelectionGroup;
-	CvUnit* pLoopUnit;
 	CvPlot* pFromPlot;
 	CvPlot* pToPlot;
 	int iWorstCost;
-	int iCost;
 	int iWorstMovesLeft;
-	int iMovesLeft;
 	int iWorstMax;
-	int iMax;
 
 	pFromPlot = GC.getMapINLINE().plotSorenINLINE(parent->m_iX, parent->m_iY);
 	FAssert(pFromPlot != NULL);
@@ -1363,102 +1866,41 @@ int pathCost(FAStarNode* parent, FAStarNode* node, int data, const void* pointer
 	iWorstMovesLeft = MAX_INT;
 	iWorstMax = MAX_INT;
 
-	pUnitNode = pSelectionGroup->headUnitNode();
-
-	while (pUnitNode != NULL)
+	// Performance: per-search caches only for the group that started the search
+	if (pointer == s_pPathGroup)
 	{
-		pLoopUnit = ::getUnit(pUnitNode->m_data);
-		pUnitNode = pSelectionGroup->nextUnitNode(pUnitNode);
-		FAssertMsg(pLoopUnit->getDomainType() != DOMAIN_AIR, "pLoopUnit->getDomainType() is not expected to be equal with DOMAIN_AIR");
+		updatePathGroupFlags(pSelectionGroup);
 
-		if (parent->m_iData1 > 0)
+#if defined(PERF_PROFILE) && PERF_PATH_COUNTERS
+		perfPathCountCall(pSelectionGroup, true);
+		s_iPathUnitEvalsSkipped += s_iPathGroupNumUnits - (int)s_aPathUnits.size();
+#endif
+
+		// only the first unit of each class of equivalent units is in s_aPathUnits (see s_aiPathUnitClass),
+		// with its values (moves, combat ability, team, ...) calculated once per search
+		const int iNumUnits = (int)s_aPathUnits.size();
+		for (int iUnit = 0; iUnit < iNumUnits; iUnit++)
 		{
-			iMax = parent->m_iData1;
+			pathCostUnit(s_aPathUnits[iUnit], parent, pFromPlot, pToPlot, finder, s_bPathGroupAIControlled, true, iWorstCost, iWorstMovesLeft, iWorstMax);
 		}
-		else
+	}
+	else
+	{
+#if defined(PERF_PROFILE) && PERF_PATH_COUNTERS
+		perfPathCountCall(pSelectionGroup, false);
+#endif
+
+		const bool bAIControlled = pSelectionGroup->AI_isControlled();
+		CLLNode<IDInfo>* pUnitNode = pSelectionGroup->headUnitNode();
+
+		while (pUnitNode != NULL)
 		{
-			iMax = pLoopUnit->maxMoves();
-		}
+			CvUnit* pLoopUnit = ::getUnit(pUnitNode->m_data);
+			pUnitNode = pSelectionGroup->nextUnitNode(pUnitNode);
 
-		iCost = pToPlot->movementCost(pLoopUnit, pFromPlot);
-
-		iMovesLeft = std::max(0, (iMax - iCost));
-
-		if (iMovesLeft <= iWorstMovesLeft)
-		{
-			if ((iMovesLeft < iWorstMovesLeft) || (iMax <= iWorstMax))
-			{
-				if (iMovesLeft == 0)
-				{
-					iCost = (PATH_MOVEMENT_WEIGHT * iMax);
-
-					if (pToPlot->getTeam() != pLoopUnit->getTeam())
-					{
-						iCost += PATH_TERRITORY_WEIGHT;
-					}
-
-					// Damage caused by features (mods)
-					if (0 != GC.getPATH_DAMAGE_WEIGHT())
-					{
-						if (pToPlot->getFeatureType() != NO_FEATURE)
-						{
-							iCost += (GC.getPATH_DAMAGE_WEIGHT() * std::max(0, GC.getFeatureInfo(pToPlot->getFeatureType()).getTurnDamage())) / GC.getMAX_HIT_POINTS();
-						}
-
-						if (pToPlot->getExtraMovePathCost() > 0)
-						{
-							iCost += (PATH_MOVEMENT_WEIGHT * pToPlot->getExtraMovePathCost());
-						}
-					}
-				}
-				else
-				{
-					iCost = (PATH_MOVEMENT_WEIGHT * iCost);
-				}
-
-				if (pLoopUnit->canFight())
-				{
-					if (iMovesLeft == 0)
-					{
-						iCost += (PATH_DEFENSE_WEIGHT * std::max(0, (200 - ((pLoopUnit->noDefensiveBonus()) ? 0 : pToPlot->defenseModifier(pLoopUnit->getTeam(), false)))));
-					}
-
-					if (pSelectionGroup->AI_isControlled())
-					{
-						if (pLoopUnit->canAttack())
-						{
-							if (gDLL->getFAStarIFace()->IsPathDest(finder, pToPlot->getX_INLINE(), pToPlot->getY_INLINE()))
-							{
-								if (pToPlot->isVisibleEnemyDefender(pLoopUnit))
-								{
-									iCost += (PATH_DEFENSE_WEIGHT * std::max(0, (200 - ((pLoopUnit->noDefensiveBonus()) ? 0 : pFromPlot->defenseModifier(pLoopUnit->getTeam(), false)))));
-
-									if (!(pFromPlot->isCity()))
-									{
-										iCost += PATH_CITY_WEIGHT;
-									}
-
-									if (pFromPlot->isRiverCrossing(directionXY(pFromPlot, pToPlot)))
-									{
-										if (!(pLoopUnit->isRiver()))
-										{
-											iCost += (PATH_RIVER_WEIGHT * -(GC.getRIVER_ATTACK_MODIFIER()));
-											iCost += (PATH_MOVEMENT_WEIGHT * iMovesLeft);
-										}
-									}
-								}
-							}
-						}
-					}
-				}
-
-				if (iCost < iWorstCost)
-				{
-					iWorstCost = iCost;
-					iWorstMovesLeft = iMovesLeft;
-					iWorstMax = iMax;
-				}
-			}
+			PathUnitInfo kUnit;
+			fillPathUnitInfo(kUnit, pLoopUnit);
+			pathCostUnit(kUnit, parent, pFromPlot, pToPlot, finder, bAIControlled, false, iWorstCost, iWorstMovesLeft, iWorstMax);
 		}
 	}
 
@@ -1479,6 +1921,8 @@ int pathCost(FAStarNode* parent, FAStarNode* node, int data, const void* pointer
 
 int pathValid(FAStarNode* parent, FAStarNode* node, int data, const void* pointer, FAStar* finder)
 {
+	PROFILE_PATH_CALLBACK();
+
 	CvSelectionGroup* pSelectionGroup;
 	CvPlot* pFromPlot;
 	CvPlot* pToPlot;
@@ -1496,8 +1940,18 @@ int pathValid(FAStarNode* parent, FAStarNode* node, int data, const void* pointe
 
 	pSelectionGroup = ((CvSelectionGroup *)pointer);
 
+	// Performance: these properties of the group that started the search do not change during the search, so
+	// they are calculated once per search (each of them looks up the group's head unit)
+	const bool bPathCache = (pointer == s_pPathGroup);
+	if (bPathCache)
+	{
+		updatePathGroupFlags(pSelectionGroup);
+	}
+	const DomainTypes eGroupDomain = bPathCache ? s_ePathGroupDomain : pSelectionGroup->getDomainType();
+	const TeamTypes eHeadTeam = bPathCache ? s_ePathGroupHeadTeam : pSelectionGroup->getHeadTeam();
+
 	// XXX might want to take this out...
-	if (pSelectionGroup->getDomainType() == DOMAIN_SEA)
+	if (eGroupDomain == DOMAIN_SEA)
 	{
 		if (pFromPlot->isWater() && pToPlot->isWater())
 		{
@@ -1508,49 +1962,53 @@ int pathValid(FAStarNode* parent, FAStarNode* node, int data, const void* pointe
 		}
 	}
 
-	if (pSelectionGroup->atPlot(pFromPlot))
+	if (bPathCache ? (s_pPathGroupPlot == pFromPlot) : pSelectionGroup->atPlot(pFromPlot))
 	{
 		return TRUE;
 	}
 
-	if (gDLL->getFAStarIFace()->GetInfo(finder) & MOVE_SAFE_TERRITORY)
+	// Performance: the search flags do not change during a search, and every GetInfo() is a call into the exe
+	const int iInfo = gDLL->getFAStarIFace()->GetInfo(finder);
+
+	if (iInfo & MOVE_SAFE_TERRITORY)
 	{
-		if (!(pFromPlot->isRevealed(pSelectionGroup->getHeadTeam(), false)))
+		if (!(pFromPlot->isRevealed(eHeadTeam, false)))
 		{
 			return FALSE;
 		}
 
 		if (pFromPlot->isOwned())
 		{
-			if (pFromPlot->getTeam() != pSelectionGroup->getHeadTeam())
+			if (pFromPlot->getTeam() != eHeadTeam)
 			{
 				return FALSE;
 			}
 		}
 	}
 
-	if (gDLL->getFAStarIFace()->GetInfo(finder) & MOVE_NO_ENEMY_TERRITORY)
+	if (iInfo & MOVE_NO_ENEMY_TERRITORY)
 	{
 		if (pFromPlot->isOwned())
 		{
-			if (atWar(pFromPlot->getTeam(), pSelectionGroup->getHeadTeam()))
+			if (atWar(pFromPlot->getTeam(), eHeadTeam))
 			{
 				return FALSE;
 			}
 		}
 	}
 
-	bAIControl = pSelectionGroup->AI_isControlled();
+	bAIControl = bPathCache ? s_bPathGroupAIControlled : pSelectionGroup->AI_isControlled();
 
 	if (bAIControl)
 	{
+		PROFILE_PATH_SECTION("pathValid: danger check");
 		if ((parent->m_iData2 > 1) || (parent->m_iData1 == 0))
 		{
-			if (!(gDLL->getFAStarIFace()->GetInfo(finder) & MOVE_IGNORE_DANGER))
+			if (!(iInfo & MOVE_IGNORE_DANGER))
 			{
-				if (!(pSelectionGroup->canFight()) && !(pSelectionGroup->alwaysInvisible()))
+				if (bPathCache ? (!s_bPathGroupCanFight && !s_bPathGroupAlwaysInvisible) : (!(pSelectionGroup->canFight()) && !(pSelectionGroup->alwaysInvisible())))
 				{
-					if (GET_PLAYER(pSelectionGroup->getHeadOwner()).AI_getPlotDanger(pFromPlot) > 0)
+					if (getPathPlotDanger(bPathCache ? s_ePathGroupHeadOwner : pSelectionGroup->getHeadOwner(), pFromPlot) > 0)
 					{
 						return FALSE;
 					}
@@ -1559,18 +2017,19 @@ int pathValid(FAStarNode* parent, FAStarNode* node, int data, const void* pointe
 		}
 	}
 
-	if (bAIControl || pFromPlot->isRevealed(pSelectionGroup->getHeadTeam(), false))
+	if (bAIControl || pFromPlot->isRevealed(eHeadTeam, false))
 	{
-		if (gDLL->getFAStarIFace()->GetInfo(finder) & MOVE_THROUGH_ENEMY)
+		PROFILE_PATH_SECTION("pathValid: can move check");
+		if (iInfo & MOVE_THROUGH_ENEMY)
 		{
-			if (!(pSelectionGroup->canMoveOrAttackInto(pFromPlot)))
+			if (!getPathCanMove(pSelectionGroup, pFromPlot, true))
 			{
 				return FALSE;
 			}
 		}
 		else
 		{
-			if (!(pSelectionGroup->canMoveThrough(pFromPlot)))
+			if (!getPathCanMove(pSelectionGroup, pFromPlot, false))
 			{
 				return FALSE;
 			}
@@ -1583,7 +2042,7 @@ int pathValid(FAStarNode* parent, FAStarNode* node, int data, const void* pointe
 
 int pathAdd(FAStarNode* parent, FAStarNode* node, int data, const void* pointer, FAStar* finder)
 {
-	PROFILE_FUNC();
+	PROFILE_PATH_CALLBACK();
 
 	CvSelectionGroup* pSelectionGroup = ((CvSelectionGroup *)pointer);
 	FAssert(pSelectionGroup->getNumUnits() > 0);
@@ -1626,15 +2085,39 @@ int pathAdd(FAStarNode* parent, FAStarNode* node, int data, const void* pointer,
 			iTurns++;
 		}
 
-		for (CLLNode<IDInfo>* pUnitNode = pSelectionGroup->headUnitNode(); pUnitNode != NULL; pUnitNode = pSelectionGroup->nextUnitNode(pUnitNode))
+		if (pointer == s_pPathGroup)
 		{
-			CvUnit* pLoopUnit = ::getUnit(pUnitNode->m_data);
+			// Performance: same values as the loop below, for the group that started the search. iMoves is the
+			// minimum over the units, so only the first unit of each class of equivalent units (see
+			// s_aiPathUnitClass) is needed; the moves come from the per-search unit values, and for a single unit
+			// the step cost is the one pathCost just used for the same step (getPathStepCost).
+			// (Not for the initial add, which may come before the search is set up by pathDestValid.)
+			updatePathGroupFlags(pSelectionGroup);
+			const bool bSingleUnit = (s_iPathGroupNumUnits == 1);
+			const int iNumUnits = (int)s_aPathUnits.size();
+			for (int iUnit = 0; iUnit < iNumUnits; iUnit++)
+			{
+				const PathUnitInfo& kUnit = s_aPathUnits[iUnit];
 
-			int iUnitMoves = (iStartMoves == 0 ? pLoopUnit->maxMoves() : iStartMoves);
-			iUnitMoves -= pToPlot->movementCost(pLoopUnit, pFromPlot);
-			iUnitMoves = std::max(iUnitMoves, 0);
-			
-			iMoves = std::min(iMoves, iUnitMoves);
+				int iUnitMoves = (iStartMoves == 0 ? kUnit.iMaxMoves : iStartMoves);
+				iUnitMoves -= (bSingleUnit ? getPathStepCost(kUnit.pUnit, pFromPlot, pToPlot) : pToPlot->movementCost(kUnit.pUnit, pFromPlot));
+				iUnitMoves = std::max(iUnitMoves, 0);
+
+				iMoves = std::min(iMoves, iUnitMoves);
+			}
+		}
+		else
+		{
+			for (CLLNode<IDInfo>* pUnitNode = pSelectionGroup->headUnitNode(); pUnitNode != NULL; pUnitNode = pSelectionGroup->nextUnitNode(pUnitNode))
+			{
+				CvUnit* pLoopUnit = ::getUnit(pUnitNode->m_data);
+
+				int iUnitMoves = (iStartMoves == 0 ? pLoopUnit->maxMoves() : iStartMoves);
+				iUnitMoves -= pToPlot->movementCost(pLoopUnit, pFromPlot);
+				iUnitMoves = std::max(iUnitMoves, 0);
+
+				iMoves = std::min(iMoves, iUnitMoves);
+			}
 		}
 	}
 

@@ -10,7 +10,31 @@
 		<iDefineIntVal>0</iDefineIntVal>
 	</Define>
 	<Define>
+		<DefineName>AI_FRAME_TIME_BUDGET_MS</DefineName>
+		<iDefineIntVal>2000</iDefineIntVal>
+	</Define>
+	<Define>
 		<DefineName>FIXED_RANDOM_SEED</DefineName>
-		<iDefineIntVal>12345</iDefineIntVal>
+		<iDefineIntVal>0</iDefineIntVal>
+	</Define>
+	<Define>
+		<DefineName>AUTOPLAY_RAND_LOG_TURN</DefineName>
+		<iDefineIntVal>0</iDefineIntVal>
+	</Define>
+	<Define>
+		<DefineName>PERF_MEMORY_LOG</DefineName>
+		<iDefineIntVal>0</iDefineIntVal>
+	</Define>
+	<Define>
+		<DefineName>MAP_SYMBOL_BATCHING</DefineName>
+		<iDefineIntVal>1</iDefineIntVal>
+	</Define>
+	<Define>
+		<DefineName>AUTOPLAY_SKIP_AUTOSAVE</DefineName>
+		<iDefineIntVal>1</iDefineIntVal>
+	</Define>
+	<Define>
+		<DefineName>PYTHON_SKIP_TRIVIAL_CALLBACKS</DefineName>
+		<iDefineIntVal>1</iDefineIntVal>
 	</Define>
 </Civ4Defines>

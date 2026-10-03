@@ -66,6 +66,8 @@ function Test-Pair($save, $reference) {
 		if (-not $proc) { Write-Host "The game did not start within 2 minutes."; return 2 }
 		if (-not $proc.WaitForExit($TimeoutMinutes * 60 * 1000)) {
 			Write-Host "The game is still running after $TimeoutMinutes minutes, leaving it alone."
+			# it may still write AutoPlay.log: the remaining saves are not run (see the loop below)
+			$script:bAbort = $true
 			return 2
 		}
 		Write-Host ("Game exited after {0:N0} s." -f ((Get-Date) - $start).TotalSeconds)
@@ -121,10 +123,16 @@ foreach ($save in Get-ChildItem $TestSaves -Filter "$Name.CivBeyondSwordSave") {
 if ($pairs.Count -eq 0) { Write-Host "No save/log pairs found in $TestSaves"; exit 2 }
 
 $results = @()
+$script:bAbort = $false
 foreach ($pair in $pairs) {
 	Write-Host ""
 	Write-Host "=== $([IO.Path]::GetFileNameWithoutExtension($pair[0])) ==="
 	$results += [pscustomobject]@{ Name = [IO.Path]::GetFileNameWithoutExtension($pair[0]); Code = (Test-Pair $pair[0] $pair[1]) }
+	if ($script:bAbort) {
+		Write-Host ""
+		Write-Host "Stopped: that game is still running, so the remaining saves were not run."
+		break
+	}
 }
 
 Write-Host ""

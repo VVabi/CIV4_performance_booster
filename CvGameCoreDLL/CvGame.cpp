@@ -2130,7 +2130,9 @@ void CvGame::runGameLogicStep()
 		CvEventReporter::getInstance().genericEvent("gameUpdate", pyArgs.makeFunctionArgs());
 		}
 
-		if (getTurnSlice() == 0)
+		// AUTOPLAY_SKIP_AUTOSAVE: also no initial autosave when auto-play was just started (e.g. by the gameUpdate
+		// event above, see the autorun in CvEventManager.py), as for the autosave at the end of doTurn
+		if (getTurnSlice() == 0 && (getAIAutoPlay() == 0 || GC.getDefineINT("AUTOPLAY_SKIP_AUTOSAVE") <= 0))
 		{
 			gDLL->getEngineIFace()->AutoSave(true);
 		}

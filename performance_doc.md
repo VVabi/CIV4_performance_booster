@@ -110,6 +110,10 @@ that first request computed them later from a different game state and changed a
   callback is on.
 - The unit's own value is calculated only when first needed; the random number is drawn under the same
   conditions as before. `AI_upgrade` 4.4 s -> 2.8 s.
+- The reordering calls `canUpgrade()` for more unit types than the original (before the value check instead of
+  after it). So the reordered loop is only used when no Python callback can notice that: `getUpgradePriceOverride`
+  only returns a constant (and is therefore skipped, see the Python callbacks below) and the `canTrain` /
+  `cannotTrain` callbacks are off. Otherwise (a mod with such callbacks) the original loop runs.
 
 ### Citizen evaluation cache (`CvCityAI`)
 `AI_beginCitizenEval()` / `AI_endCitizenEval()` (nestable) mark a window in which the caller only evaluates
@@ -181,7 +185,8 @@ ends. The game never reads these symbols. Not used in network multiplayer. Symbo
   depends on the number of frames, not only on the game state.
 - **`FIXED_RANDOM_SEED`** and **`AUTOPLAY_RAND_LOG_TURN`** (`CvRandom.cpp`): reproducible runs and a log of
   every game random draw of one turn, for comparing two runs.
-- **`AUTOPLAY_SKIP_AUTOSAVE`**: no autosaves during auto-play; the turn that ends the run is still saved.
+- **`AUTOPLAY_SKIP_AUTOSAVE`**: no autosaves during auto-play (neither the one at the end of each turn nor the
+  initial one at turn slice 0 when auto-play is started right away); the turn that ends the run is still saved.
 
 ## Profiling (Timing build)
 - Build: `CvGameCoreDLL\build_timing.bat` (= `build.bat Timing`, defines `PERF_PROFILE`, DLL is copied to

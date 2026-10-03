@@ -1353,6 +1353,20 @@ struct PathUnitInfo
 	bool bCanAttack;
 	bool bNoDefensiveBonus;
 	bool bRiver;
+	// what CvPlot::movementCost reads from the unit (see pathMovementCost); only filled by fillPathMoveInfo, for
+	// the group that started the search
+	bool bFlatMove;				// flatMovementCost() or an air unit
+	bool bHuman;
+	DomainTypes eDomain;
+	bool bMoveAllTerrain;
+	bool bIgnoreTerrainCost;
+	bool bHillsDoubleMove;
+	bool bEnemyRoute;
+	bool bAlwaysHostile;		// the unit info flag (CvUnit::isAlwaysHostile also checks the plot)
+	bool bBridgeBuilding;		// of the unit's team
+	int iBaseMoves;
+	int iMoveDiscount;
+	int iRouteCostIndex;		// start of this unit's entries in s_aiPathRouteCost
 };
 
 static void fillPathUnitInfo(PathUnitInfo& kInfo, CvUnit* pUnit)
@@ -1364,6 +1378,33 @@ static void fillPathUnitInfo(PathUnitInfo& kInfo, CvUnit* pUnit)
 	kInfo.bCanAttack = pUnit->canAttack();
 	kInfo.bNoDefensiveBonus = pUnit->noDefensiveBonus();
 	kInfo.bRiver = pUnit->isRiver();
+}
+
+// Performance: per route type and unit, the two route costs CvPlot::movementCost calculates on every step:
+// [2 * route] = route movement cost + the team's route change, [2 * route + 1] = flat route cost * base moves
+static std::vector<int> s_aiPathRouteCost;
+
+static void fillPathMoveInfo(PathUnitInfo& kInfo)
+{
+	const CvUnit* pUnit = kInfo.pUnit;
+	const CvTeam& kTeam = GET_TEAM(kInfo.eTeam);
+	kInfo.bFlatMove = (pUnit->flatMovementCost() || (pUnit->getDomainType() == DOMAIN_AIR));
+	kInfo.bHuman = pUnit->isHuman();
+	kInfo.eDomain = pUnit->getDomainType();
+	kInfo.bMoveAllTerrain = pUnit->canMoveAllTerrain();
+	kInfo.bIgnoreTerrainCost = pUnit->ignoreTerrainCost();
+	kInfo.bHillsDoubleMove = pUnit->isHillsDoubleMove();
+	kInfo.bEnemyRoute = pUnit->isEnemyRoute();
+	kInfo.bAlwaysHostile = pUnit->getUnitInfo().isAlwaysHostile();
+	kInfo.bBridgeBuilding = kTeam.isBridgeBuilding();
+	kInfo.iBaseMoves = pUnit->baseMoves();
+	kInfo.iMoveDiscount = pUnit->getExtraMoveDiscount();
+	kInfo.iRouteCostIndex = (int)s_aiPathRouteCost.size();
+	for (int iI = 0; iI < GC.getNumRouteInfos(); iI++)
+	{
+		s_aiPathRouteCost.push_back(GC.getRouteInfo((RouteTypes)iI).getMovementCost() + kTeam.getRouteChange((RouteTypes)iI));
+		s_aiPathRouteCost.push_back(GC.getRouteInfo((RouteTypes)iI).getFlatMovementCost() * kInfo.iBaseMoves);
+	}
 }
 
 // the units pathCost evaluates: the first unit of each class (see s_aiPathUnitClass), in the order of the group
@@ -1407,6 +1448,7 @@ static void updatePathGroupFlags(CvSelectionGroup* pSelectionGroup)
 		updatePathUnitClasses(pSelectionGroup);
 
 		s_aPathUnits.clear();
+		s_aiPathRouteCost.clear();
 		const bool bUseClasses = (s_iPathGroupNumUnits > 1 && (int)s_aiPathUnitClass.size() == s_iPathGroupNumUnits);
 		int iUnitIndex = -1;
 		for (CLLNode<IDInfo>* pUnitNode = pSelectionGroup->headUnitNode(); pUnitNode != NULL; pUnitNode = pSelectionGroup->nextUnitNode(pUnitNode))
@@ -1419,6 +1461,7 @@ static void updatePathGroupFlags(CvSelectionGroup* pSelectionGroup)
 			}
 			PathUnitInfo kInfo;
 			fillPathUnitInfo(kInfo, pLoopUnit);
+			fillPathMoveInfo(kInfo);
 			s_aPathUnits.push_back(kInfo);
 		}
 	}
@@ -1454,12 +1497,144 @@ static std::vector<int> s_aiPathStepCostValue;
 static std::vector<int> s_aiPathDefenseStamp;
 static std::vector<int> s_aiPathDefenseValue;
 
-static int getPathStepCost(const CvUnit* pUnit, const CvPlot* pFromPlot, const CvPlot* pToPlot)
+// Performance: CvPlot::isValidRoute(pUnit) per plot, cached per search. Within a group all units have the same
+// owner, so apart from the plot the result only depends on the unit's enemy route and always hostile flags (both
+// are part of the stamp); everything else it reads (route, plot owner, wars, cities and forts) is fixed during a
+// search.
+static std::vector<int> s_aiPathRouteValidStamp;
+static std::vector<char> s_abPathRouteValidValue;
+
+static bool getPathRouteValid(const PathUnitInfo& kUnit, const CvPlot* pPlot)
+{
+	if (!pPlot->isRoute())
+	{
+		return false;
+	}
+	int iIndex = GC.getMapINLINE().plotNumINLINE(pPlot->getX_INLINE(), pPlot->getY_INLINE());
+	if ((int)s_aiPathRouteValidStamp.size() != GC.getMapINLINE().numPlotsINLINE())
+	{
+		s_aiPathRouteValidStamp.assign(GC.getMapINLINE().numPlotsINLINE(), -1);
+		s_abPathRouteValidValue.assign(GC.getMapINLINE().numPlotsINLINE(), 0);
+	}
+	int iStamp = s_iPathSearchId * 4 + (kUnit.bEnemyRoute ? 2 : 0) + (kUnit.bAlwaysHostile ? 1 : 0);
+	if (s_aiPathRouteValidStamp[iIndex] != iStamp)
+	{
+		s_aiPathRouteValidStamp[iIndex] = iStamp;
+		s_abPathRouteValidValue[iIndex] = pPlot->isValidRoute(kUnit.pUnit) ? 1 : 0;
+	}
+	return (s_abPathRouteValidValue[iIndex] != 0);
+}
+
+// CvPlot::isValidDomainForAction(unit) with the unit's values from kUnit
+static inline bool isPathValidDomainForAction(const PathUnitInfo& kUnit, const CvPlot* pPlot)
+{
+	switch (kUnit.eDomain)
+	{
+	case DOMAIN_SEA:
+		return (pPlot->isWater() || kUnit.bMoveAllTerrain);
+	case DOMAIN_AIR:
+		return false;
+	case DOMAIN_LAND:
+	case DOMAIN_IMMOBILE:
+		return (!pPlot->isWater() || kUnit.bMoveAllTerrain);
+	default:
+		return false;
+	}
+}
+
+// Performance: pToPlot->movementCost(kUnit.pUnit, pFromPlot), the same steps in the same order, but with the unit's
+// values calculated once per search (fillPathMoveInfo) and the road check of a plot cached per search
+// (getPathRouteValid). Only for the units of the group that started the search.
+static int pathMovementCost(const PathUnitInfo& kUnit, const CvPlot* pFromPlot, const CvPlot* pToPlot)
+{
+	const int iMoveDenominator = GC.getMOVE_DENOMINATOR();
+
+	if (kUnit.bFlatMove)
+	{
+		return iMoveDenominator;
+	}
+
+	if (kUnit.bHuman)
+	{
+		if (!pToPlot->isRevealed(kUnit.eTeam, false))
+		{
+			return kUnit.iMaxMoves;
+		}
+	}
+
+	// pFromPlot->isValidDomainForLocation(unit)
+	if (!isPathValidDomainForAction(kUnit, pFromPlot) && !pFromPlot->isCity(true, kUnit.eTeam))
+	{
+		return kUnit.iMaxMoves;
+	}
+
+	if (!isPathValidDomainForAction(kUnit, pToPlot))
+	{
+		return iMoveDenominator;
+	}
+
+	const FeatureTypes eFeature = pToPlot->getFeatureType();
+	const TerrainTypes eTerrain = pToPlot->getTerrainType();
+	int iRegularCost;
+	if (kUnit.bIgnoreTerrainCost)
+	{
+		iRegularCost = 1;
+	}
+	else
+	{
+		iRegularCost = ((eFeature == NO_FEATURE) ? GC.getTerrainInfo(eTerrain).getMovementCost() : GC.getFeatureInfo(eFeature).getMovementCost());
+
+		if (pToPlot->isHills())
+		{
+			iRegularCost += GC.getHILLS_EXTRA_MOVEMENT();
+		}
+
+		if (iRegularCost > 0)
+		{
+			iRegularCost = std::max(1, (iRegularCost - kUnit.iMoveDiscount));
+		}
+	}
+
+	bool bHasTerrainCost = (iRegularCost > 1);
+
+	iRegularCost = std::min(iRegularCost, kUnit.iBaseMoves);
+
+	iRegularCost *= iMoveDenominator;
+
+	if (bHasTerrainCost)
+	{
+		if (((eFeature == NO_FEATURE) ? kUnit.pUnit->isTerrainDoubleMove(eTerrain) : kUnit.pUnit->isFeatureDoubleMove(eFeature)) ||
+			(pToPlot->isHills() && kUnit.bHillsDoubleMove))
+		{
+			iRegularCost /= 2;
+		}
+	}
+
+	int iRouteCost;
+	int iRouteFlatCost;
+	if (getPathRouteValid(kUnit, pFromPlot) && getPathRouteValid(kUnit, pToPlot) && (kUnit.bBridgeBuilding || !(pFromPlot->isRiverCrossing(directionXY(pFromPlot, pToPlot)))))
+	{
+		const int* piRouteCost = &s_aiPathRouteCost[kUnit.iRouteCostIndex];
+		const int iFromRoute = 2 * (int)pFromPlot->getRouteType();
+		const int iToRoute = 2 * (int)pToPlot->getRouteType();
+		iRouteCost = std::max(piRouteCost[iFromRoute], piRouteCost[iToRoute]);
+		iRouteFlatCost = std::max(piRouteCost[iFromRoute + 1], piRouteCost[iToRoute + 1]);
+	}
+	else
+	{
+		iRouteCost = MAX_INT;
+		iRouteFlatCost = MAX_INT;
+	}
+
+	return std::max(1, std::min(iRegularCost, std::min(iRouteCost, iRouteFlatCost)));
+}
+
+static int getPathStepCost(const PathUnitInfo& kUnit, const CvPlot* pFromPlot, const CvPlot* pToPlot)
 {
 	DirectionTypes eDirection = directionXY(pFromPlot, pToPlot);
 	if (eDirection == NO_DIRECTION)
 	{
-		return pToPlot->movementCost(pUnit, pFromPlot);
+		return pathMovementCost(kUnit, pFromPlot, pToPlot);
 	}
 	int iSize = GC.getMapINLINE().numPlotsINLINE() * NUM_DIRECTION_TYPES;
 	if ((int)s_aiPathStepCostStamp.size() != iSize)
@@ -1471,7 +1646,7 @@ static int getPathStepCost(const CvUnit* pUnit, const CvPlot* pFromPlot, const C
 	if (s_aiPathStepCostStamp[iIndex] != s_iPathSearchId)
 	{
 		s_aiPathStepCostStamp[iIndex] = s_iPathSearchId;
-		s_aiPathStepCostValue[iIndex] = pToPlot->movementCost(pUnit, pFromPlot);
+		s_aiPathStepCostValue[iIndex] = pathMovementCost(kUnit, pFromPlot, pToPlot);
 	}
 	return s_aiPathStepCostValue[iIndex];
 }
@@ -1530,7 +1705,25 @@ static void newPathCacheGeneration()
 		s_aiPathStepCostValue.clear();
 		s_aiPathDefenseStamp.clear();
 		s_aiPathDefenseValue.clear();
+		s_aiPathRouteValidStamp.clear();
+		s_abPathRouteValidValue.clear();
 	}
+}
+
+// Performance: the destination of the current search, for pathCost (instead of asking the exe with IsPathDest for
+// every unit evaluation). Set by pathDestValid, which gets it from the exe at the start of every search; until then
+// (s_pPathDestFinder == NULL) pathCost asks the exe as before.
+static const FAStar* s_pPathDestFinder = NULL;
+static int s_iPathDestX = -1;
+static int s_iPathDestY = -1;
+
+static bool isPathDest(FAStar* finder, const CvPlot* pPlot)
+{
+	if (finder != s_pPathDestFinder)
+	{
+		return gDLL->getFAStarIFace()->IsPathDest(finder, pPlot->getX_INLINE(), pPlot->getY_INLINE());
+	}
+	return (pPlot->getX_INLINE() == s_iPathDestX && pPlot->getY_INLINE() == s_iPathDestY);
 }
 
 // Performance: starts a new path search for the per-search caches. Called by the DLL right before each
@@ -1542,6 +1735,7 @@ void startPathSearch(const void* pGroup)
 {
 	newPathCacheGeneration();
 	s_pPathGroup = pGroup;
+	s_pPathDestFinder = NULL;
 }
 
 int pathDestValid(int iToX, int iToY, const void* pointer, FAStar* finder)
@@ -1550,6 +1744,9 @@ int pathDestValid(int iToX, int iToY, const void* pointer, FAStar* finder)
 
 	// new path search: new cache generation (see startPathSearch)
 	startPathSearch(pointer);
+	s_pPathDestFinder = finder;
+	s_iPathDestX = iToX;
+	s_iPathDestY = iToY;
 
 	CLLNode<IDInfo>* pUnitNode1;
 	CLLNode<IDInfo>* pUnitNode2;
@@ -1759,7 +1956,14 @@ static void pathCostUnit(const PathUnitInfo& kUnit, FAStarNode* parent, CvPlot* 
 
 	{
 		PROFILE_PATH_SECTION("pathCost: step cost");
-		iCost = (bPathCache && s_iPathGroupNumUnits == 1) ? getPathStepCost(kUnit.pUnit, pFromPlot, pToPlot) : pToPlot->movementCost(kUnit.pUnit, pFromPlot);
+		if (bPathCache)
+		{
+			iCost = (s_iPathGroupNumUnits == 1) ? getPathStepCost(kUnit, pFromPlot, pToPlot) : pathMovementCost(kUnit, pFromPlot, pToPlot);
+		}
+		else
+		{
+			iCost = pToPlot->movementCost(kUnit.pUnit, pFromPlot);
+		}
 	}
 
 	iMovesLeft = std::max(0, (iMax - iCost));
@@ -1809,7 +2013,7 @@ static void pathCostUnit(const PathUnitInfo& kUnit, FAStarNode* parent, CvPlot* 
 					PROFILE_PATH_SECTION("pathCost: attack checks");
 					if (kUnit.bCanAttack)
 					{
-						if (gDLL->getFAStarIFace()->IsPathDest(finder, pToPlot->getX_INLINE(), pToPlot->getY_INLINE()))
+						if (isPathDest(finder, pToPlot))
 						{
 							if (pToPlot->isVisibleEnemyDefender(kUnit.pUnit))
 							{
@@ -2100,7 +2304,7 @@ int pathAdd(FAStarNode* parent, FAStarNode* node, int data, const void* pointer,
 				const PathUnitInfo& kUnit = s_aPathUnits[iUnit];
 
 				int iUnitMoves = (iStartMoves == 0 ? kUnit.iMaxMoves : iStartMoves);
-				iUnitMoves -= (bSingleUnit ? getPathStepCost(kUnit.pUnit, pFromPlot, pToPlot) : pToPlot->movementCost(kUnit.pUnit, pFromPlot));
+				iUnitMoves -= (bSingleUnit ? getPathStepCost(kUnit, pFromPlot, pToPlot) : pathMovementCost(kUnit, pFromPlot, pToPlot));
 				iUnitMoves = std::max(iUnitMoves, 0);
 
 				iMoves = std::min(iMoves, iUnitMoves);

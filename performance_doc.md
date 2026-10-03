@@ -72,6 +72,24 @@ check never fired. Caches are only used for the group that started the search.
   The initial add keeps the old code (it may come before `pathDestValid` sets up the search).
 - **Search flags** in `pathValid`: `GetInfo(finder)` (a call into the exe) is read once per call instead of up
   to four times; the flags do not change during a search. Not measurable on the large map (~0.5%).
+- **Movement cost of a step** (`pathMovementCost`): counters on the large map (26 rounds, 360M `pathCost`
+  calls) showed that the per-search step cost cache only hits 18% of the time (a step is rarely evaluated twice in
+  one search), so `CvPlot::movementCost` still ran ~440M times, each time looking up the same unit values again
+  (unit info, owner, team, base moves up to three times, route changes, bridge building) and doing the road check
+  (`isValidRoute` -> `isEnemy` -> `getCombatOwner` -> `atWar`) for both plots of every step. `pathMovementCost` does
+  the same steps in the same order with the unit's values calculated once per search (`fillPathMoveInfo`, stored
+  in `PathUnitInfo`, including a route cost table per unit) and the road check cached per plot and search
+  (`getPathRouteValid`; within a group only the enemy route and always hostile flags can differ, both are part of
+  the stamp). Used by `pathCost` and `pathAdd` for the group that started the search (directly for multi-unit
+  groups, through the step cost cache for single units); other groups use `CvPlot::movementCost` as before.
+- **Destination check** in `pathCost` (`isPathDest`): for AI units that can attack, `pathCost` asked the exe
+  `IsPathDest` on every unit evaluation (296M calls on the large map). `pathDestValid` now keeps the destination
+  it gets at the start of each search and the check compares the coordinates; before that (or for another
+  finder) the exe is asked as before.
+- Verified with a temporary shadow check in the Timing build (removed again): every result compared with
+  `CvPlot::movementCost` and the exe's `IsPathDest`. 0 mismatches (large map: 481M / 296M checks; Pangea 500 turns:
+  115M / 66M), and both reference runs identical. Large map, Release, alternating runs: 240.0 / 238.3 s before,
+  178.4 / 210.5 s after (about -19% on average, the runs vary a lot).
 
 ### Skipping path searches is NOT done (see `inexact_targets.md`)
 "Skip hopeless targets before the path search" shortcuts are not exact: path searches with `bReuse` depend on

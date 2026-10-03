@@ -72,6 +72,24 @@ check never fired. Caches are only used for the group that started the search.
   The initial add keeps the old code (it may come before `pathDestValid` sets up the search).
 - **Search flags** in `pathValid`: `GetInfo(finder)` (a call into the exe) is read once per call instead of up
   to four times; the flags do not change during a search. Not measurable on the large map (~0.5%).
+- **Movement cost of a step** (`pathMovementCost`): counters on the large map (26 rounds, 360M `pathCost`
+  calls) showed that the per-search step cost cache only hits 18% of the time (a step is rarely evaluated twice in
+  one search), so `CvPlot::movementCost` still ran ~440M times, each time looking up the same unit values again
+  (unit info, owner, team, base moves up to three times, route changes, bridge building) and doing the road check
+  (`isValidRoute` -> `isEnemy` -> `getCombatOwner` -> `atWar`) for both plots of every step. `pathMovementCost` does
+  the same steps in the same order with the unit's values calculated once per search (`fillPathMoveInfo`, stored
+  in `PathUnitInfo`, including a route cost table per unit) and the road check cached per plot and search
+  (`getPathRouteValid`; within a group only the enemy route and always hostile flags can differ, both are part of
+  the stamp). Used by `pathCost` and `pathAdd` for the group that started the search (directly for multi-unit
+  groups, through the step cost cache for single units); other groups use `CvPlot::movementCost` as before.
+- **Destination check** in `pathCost` (`isPathDest`): for AI units that can attack, `pathCost` asked the exe
+  `IsPathDest` on every unit evaluation (296M calls on the large map). `pathDestValid` now keeps the destination
+  it gets at the start of each search and the check compares the coordinates; before that (or for another
+  finder) the exe is asked as before.
+- Verified with a temporary shadow check in the Timing build (removed again): every result compared with
+  `CvPlot::movementCost` and the exe's `IsPathDest`. 0 mismatches (large map: 481M / 296M checks; Pangea 500 turns:
+  115M / 66M), and both reference runs identical. Large map, Release, alternating runs: 240.0 / 238.3 s before,
+  178.4 / 210.5 s after (about -19% on average, the runs vary a lot).
 
 ### Skipping path searches is NOT done (see `inexact_targets.md`)
 "Skip hopeless targets before the path search" shortcuts are not exact: path searches with `bReuse` depend on
@@ -96,6 +114,15 @@ that first request computed them later from a different game state and changed a
   after it). So the reordered loop is only used when no Python callback can notice that: `getUpgradePriceOverride`
   only returns a constant (and is therefore skipped, see the Python callbacks below) and the `canTrain` /
   `cannotTrain` callbacks are off. Otherwise (a mod with such callbacks) the original loop runs.
+
+### Carrier positions (`CvUnitAI::AI_carrierSeaTransport`)
+For an AI carrier with aircraft the function scans every water plot next to land and, for each one, every plot
+within the aircraft's range: does it hold a city or improvement of a team we are at war with or plan war against
+(`isBarbarian`, `potentialWarAction` -> `isEnemy`/`atWar`, war plans). On island maps most water plots are next to
+land, so one call cost ~28 ms (`tinyIslands`: 1789 calls, 50.5 s, only 2.8 s of it path searches). The value of a
+plot in range only depends on the plot and the carrier and nothing changes during the call, so it is calculated
+once per plot and call (`s_aiCarrierAirPlotValue`, stamped with a call id); the loops, their order and the path
+searches are unchanged. `tinyIslands` 500 turns: 289.4 s -> 227.6 s, identical; the other maps barely use it.
 
 ### Citizen evaluation cache (`CvCityAI`)
 `AI_beginCitizenEval()` / `AI_endCitizenEval()` (nestable) mark a window in which the caller only evaluates

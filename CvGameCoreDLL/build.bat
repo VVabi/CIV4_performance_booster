@@ -34,6 +34,11 @@ if not defined NMAKE (echo ERROR: nmake.exe not found. Install Visual Studio wit
 echo Using nmake: %NMAKE%
 echo Target: %TARGET%
 
+rem --- Microsoft build tools that are not part of this repository (see BUILD.md) ---
+if not exist "C:\Program Files (x86)\Microsoft Visual C++ Toolkit 2003\bin\cl.exe" (echo ERROR: Visual C++ Toolkit 2003 not found in "C:\Program Files (x86)\Microsoft Visual C++ Toolkit 2003". See BUILD.md. & exit /b 1)
+if not exist "..\Tools\WindowsSDK\include\Windows.h" (echo ERROR: Windows SDK headers not found in Tools\WindowsSDK. See BUILD.md. & exit /b 1)
+if not exist "..\Tools\WindowsSDK\bin\rc.exe" (echo ERROR: rc.exe not found in Tools\WindowsSDK\bin. See BUILD.md. & exit /b 1)
+
 rem --- clean environment so no modern compiler headers/libs leak in ---
 rem rc.exe only sees include dirs via INCLUDE, so point it at the sal.h stub
 set "INCLUDE=%~dp0..\Tools\compat"
